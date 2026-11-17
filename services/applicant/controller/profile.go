@@ -416,7 +416,48 @@ func (ac *ApplicantController) MarkNotificationsRead(c *fiber.Ctx) error {
 
 	// Convert userID to int for database query
 	userIDInt := int(userID.(float64))
-	_, err := ac.DB.Exec(ctx, `
+
+	// Check if notification IDs belong to the user (foreign key validation)
+	var count int
+	err := ac.DB.QueryRow(ctx, `
+		SELECT COUNT(id) FROM notifications
+		WHERE user_id = $1 AND id = ANY($2)
+	`, userIDInt, req.IDs).Scan(&count)
+
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to verify notifications", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	if count != len(req.IDs) {
+		// Known error - some notifications don't belong to user, no logging
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "One or more notifications not found")
+	}
+
+	// Check if notifications are already marked as read
+	var alreadyReadCount int
+	err = ac.DB.QueryRow(ctx, `
+		SELECT COUNT(id) FROM notifications
+		WHERE user_id = $1 AND id = ANY($2) AND read = TRUE
+	`, userIDInt, req.IDs).Scan(&alreadyReadCount)
+
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to check notification status", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	if alreadyReadCount > 0 {
+		// Known error - some notifications already read, no logging
+		return utils.JsonErrorResponse(c, fiber.StatusNotAcceptable, "One or more notifications are already marked as read")
+	}
+
+	_, err = ac.DB.Exec(ctx, `
 		UPDATE notifications SET read = TRUE
 		WHERE user_id = $1 AND id = ANY($2)
 	`, userIDInt, req.IDs)

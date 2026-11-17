@@ -363,7 +363,7 @@ func (ac *ApplicationController) Availability(c *fiber.Ctx) error {
 	ctx := context.Background()
 
 	rows, err := ac.DB.Query(ctx, `
-		SELECT start_date, duration_months, session, COUNT(*)
+		SELECT start_date, duration_months, session, COUNT(id)
 		FROM applications
 		WHERE work_mode IN ('onsite', 'hybrid') AND status IN ('submitted', 'under_review', 'shortlisted', 'interview', 'accepted')
 		GROUP BY start_date, duration_months, session
