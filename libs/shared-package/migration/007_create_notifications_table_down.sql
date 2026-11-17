@@ -1,0 +1,7 @@
+-- Drop indexes
+DROP INDEX IF EXISTS idx_notifications_user_id;
+DROP INDEX IF EXISTS idx_notifications_read;
+DROP INDEX IF EXISTS idx_notifications_at;
+
+-- Drop table
+DROP TABLE IF EXISTS notifications;

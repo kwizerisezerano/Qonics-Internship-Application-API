@@ -1,0 +1,404 @@
+package controller
+
+import (
+	"context"
+	"time"
+
+	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/qonics/qonics-appy-api/libs/shared-package/config"
+	"github.com/qonics/qonics-appy-api/libs/shared-package/utils"
+	"github.com/qonics/qonics-appy-api/services/applicant/model"
+)
+
+type ApplicantController struct {
+	DB     *pgxpool.Pool
+	Config *config.Config
+}
+
+func NewApplicantController(db *pgxpool.Pool, cfg *config.Config) *ApplicantController {
+	return &ApplicantController{
+		DB:     db,
+		Config: cfg,
+	}
+}
+
+// GetProfile returns the current user's profile
+func (ac *ApplicantController) GetProfile(c *fiber.Ctx) error {
+	userID := c.Locals("user_id")
+
+	// Check if user is authenticated
+	if userID == nil {
+		return utils.JsonErrorResponse(c, fiber.StatusUnauthorized, "Unauthorized")
+	}
+
+	ctx := context.Background()
+
+	var profile model.ApplicantProfile
+	var fullNameEncrypted, emailEncrypted, phoneEncrypted []byte
+	var skillsArray []string
+
+	// Convert userID to int for database query
+	userIDInt := int(userID.(float64))
+	err := ac.DB.QueryRow(ctx, `
+		SELECT id, full_name_encrypted, email_encrypted, phone_encrypted,
+		       country, city, institution, field_of_study, qualification,
+		       academic_status, graduation_year, skills, bio,
+		       github_url, linkedin_url, portfolio_url
+		FROM applicant_profiles WHERE user_id = $1
+	`, userIDInt).Scan(
+		&profile.ID, &fullNameEncrypted, &emailEncrypted, &phoneEncrypted,
+		&profile.Country, &profile.City, &profile.Institution, &profile.FieldOfStudy,
+		&profile.Qualification, &profile.AcademicStatus, &profile.GraduationYear,
+		&skillsArray, &profile.Bio, &profile.GithubUrl, &profile.LinkedinUrl, &profile.PortfolioUrl,
+	)
+
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			// Known error - profile not found, no logging
+			return utils.JsonErrorResponse(c, fiber.StatusNotFound, "Profile not found")
+		}
+		// Unknown error - log as critical
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Database error", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	// Decrypt PII using pgcrypto
+	profile.FullName, err = utils.DecryptData(ctx, ac.DB, fullNameEncrypted)
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to decrypt data", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	profile.Email, err = utils.DecryptData(ctx, ac.DB, emailEncrypted)
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to decrypt data", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	profile.Phone, err = utils.DecryptData(ctx, ac.DB, phoneEncrypted)
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to decrypt data", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	profile.Skills = skillsArray
+
+	return utils.JsonSuccessResponse(c, "Profile retrieved", profile)
+}
+
+// SaveProfile updates the current user's profile
+func (ac *ApplicantController) SaveProfile(c *fiber.Ctx) error {
+	userID := c.Locals("user_id")
+
+	// Check if user is authenticated
+	if userID == nil {
+		return utils.JsonErrorResponse(c, fiber.StatusUnauthorized, "Unauthorized")
+	}
+
+	var req model.ApplicantProfile
+
+	if err := c.BodyParser(&req); err != nil {
+		// Known error - invalid request body, no logging
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	ctx := context.Background()
+
+	// Convert userID to int for database query
+	userIDInt := int(userID.(float64))
+
+	// Encrypt PII using pgcrypto
+	fullNameEncrypted, fullNameHash, err := utils.EncryptAndHash(ctx, ac.DB, req.FullName)
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to encrypt data", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	emailEncrypted, emailHash, err := utils.EncryptAndHash(ctx, ac.DB, req.Email)
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to encrypt data", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	phoneEncrypted, phoneHash, err := utils.EncryptAndHash(ctx, ac.DB, req.Phone)
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to encrypt data", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	// Update profile
+	_, err = ac.DB.Exec(ctx, `
+		UPDATE applicant_profiles
+		SET full_name_encrypted = $1, full_name_hash = $2,
+		    email_encrypted = $3, email_hash = $4,
+		    phone_encrypted = $5, phone_hash = $6,
+		    country = $7, city = $8, institution = $9,
+		    field_of_study = $10, qualification = $11,
+		    academic_status = $12, graduation_year = $13,
+		    skills = $14, bio = $15,
+		    github_url = $16, linkedin_url = $17, portfolio_url = $18
+		WHERE user_id = $19
+	`, fullNameEncrypted, fullNameHash, emailEncrypted, emailHash,
+		phoneEncrypted, phoneHash, req.Country, req.City, req.Institution,
+		req.FieldOfStudy, req.Qualification, req.AcademicStatus,
+		req.GraduationYear, req.Skills, req.Bio,
+		req.GithubUrl, req.LinkedinUrl, req.PortfolioUrl, userIDInt)
+
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to update profile", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	return utils.JsonSuccessResponse(c, "Profile updated", req)
+}
+
+// ListApplicants returns all applicants (admin only)
+func (ac *ApplicantController) ListApplicants(c *fiber.Ctx) error {
+	ctx := context.Background()
+
+	rows, err := ac.DB.Query(ctx, `
+		SELECT ap.id, ap.full_name_encrypted, ap.email_encrypted, ap.phone_encrypted,
+		       ap.country, ap.city, ap.institution, ap.field_of_study,
+		       ap.qualification, ap.academic_status, ap.graduation_year,
+		       ap.skills, ap.bio, ap.github_url, ap.linkedin_url, ap.portfolio_url,
+		       u.created_at,
+		       COALESCE(COUNT(a.id), 0) as total_applications
+		FROM applicant_profiles ap
+		JOIN users u ON ap.user_id = u.id
+		LEFT JOIN applications a ON ap.id = a.applicant_id
+		GROUP BY ap.id, u.created_at
+		ORDER BY u.created_at DESC
+	`)
+
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Database error", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+	defer rows.Close()
+
+	var applicants []model.ApplicantSummary
+	for rows.Next() {
+		var summary model.ApplicantSummary
+		var fullNameEncrypted, emailEncrypted, phoneEncrypted []byte
+		var skillsArray []string
+		var registeredAt time.Time
+
+		err := rows.Scan(
+			&summary.ID, &fullNameEncrypted, &emailEncrypted, &phoneEncrypted,
+			&summary.Country, &summary.City, &summary.Institution, &summary.FieldOfStudy,
+			&summary.Qualification, &summary.AcademicStatus, &summary.GraduationYear,
+			&skillsArray, &summary.Bio, &summary.GithubUrl, &summary.LinkedinUrl, &summary.PortfolioUrl,
+			&registeredAt, &summary.TotalApplications,
+		)
+
+		if err != nil {
+			return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Error scanning row", utils.Logger{
+				LogLevel:    utils.CRITICAL,
+				Message:     err.Error(),
+				ServiceName: ac.Config.ServiceName,
+			})
+		}
+
+		// Decrypt PII using pgcrypto
+		summary.FullName, err = utils.DecryptData(ctx, ac.DB, fullNameEncrypted)
+		if err != nil {
+			return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to decrypt data", utils.Logger{
+				LogLevel:    utils.CRITICAL,
+				Message:     err.Error(),
+				ServiceName: ac.Config.ServiceName,
+			})
+		}
+
+		summary.Email, err = utils.DecryptData(ctx, ac.DB, emailEncrypted)
+		if err != nil {
+			return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to decrypt data", utils.Logger{
+				LogLevel:    utils.CRITICAL,
+				Message:     err.Error(),
+				ServiceName: ac.Config.ServiceName,
+			})
+		}
+
+		summary.Phone, err = utils.DecryptData(ctx, ac.DB, phoneEncrypted)
+		if err != nil {
+			return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to decrypt data", utils.Logger{
+				LogLevel:    utils.CRITICAL,
+				Message:     err.Error(),
+				ServiceName: ac.Config.ServiceName,
+			})
+		}
+
+		summary.Skills = skillsArray
+		summary.RegisteredAt = registeredAt.Format(time.RFC3339)
+
+		applicants = append(applicants, summary)
+	}
+
+	return utils.JsonSuccessResponse(c, "Applicants retrieved", applicants)
+}
+
+// ListNotifications returns notifications for the current user
+func (ac *ApplicantController) ListNotifications(c *fiber.Ctx) error {
+	userID := c.Locals("user_id")
+	ctx := context.Background()
+
+	// Convert userID to int for database query
+	userIDInt := int(userID.(float64))
+	rows, err := ac.DB.Query(ctx, `
+		SELECT id, title, message, at, read
+		FROM notifications WHERE user_id = $1
+		ORDER BY at DESC
+	`, userIDInt)
+
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Database error", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+	defer rows.Close()
+
+	var notifications []model.AppNotification
+	for rows.Next() {
+		var notif model.AppNotification
+		var at time.Time
+
+		err := rows.Scan(&notif.ID, &notif.Title, &notif.Message, &at, &notif.Read)
+		if err != nil {
+			return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Error scanning row", utils.Logger{
+				LogLevel:    utils.CRITICAL,
+				Message:     err.Error(),
+				ServiceName: ac.Config.ServiceName,
+			})
+		}
+
+		notif.At = at.Format(time.RFC3339)
+		notifications = append(notifications, notif)
+	}
+
+	return utils.JsonSuccessResponse(c, "Notifications retrieved", notifications)
+}
+
+// MarkNotificationsRead marks notifications as read
+func (ac *ApplicantController) MarkNotificationsRead(c *fiber.Ctx) error {
+	userID := c.Locals("user_id")
+	var req model.MarkNotificationsReadRequest
+
+	if err := c.BodyParser(&req); err != nil {
+		// Known error - invalid request body, no logging
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	ctx := context.Background()
+
+	// Convert userID to int for database query
+	userIDInt := int(userID.(float64))
+	_, err := ac.DB.Exec(ctx, `
+		UPDATE notifications SET read = TRUE
+		WHERE user_id = $1 AND id = ANY($2)
+	`, userIDInt, req.IDs)
+
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to mark notifications as read", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	return utils.JsonSuccessResponse(c, "Notifications marked as read", nil)
+}
+
+// GetSettings returns application settings
+func (ac *ApplicantController) GetSettings(c *fiber.Ctx) error {
+	ctx := context.Background()
+
+	var settings model.AppSettings
+	var closeOn *time.Time
+
+	err := ac.DB.QueryRow(ctx, `
+		SELECT applications_open, close_on, closure_message
+		FROM settings WHERE id = 1
+	`).Scan(&settings.ApplicationsOpen, &closeOn, &settings.ClosureMessage)
+
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Database error", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	if closeOn != nil {
+		settings.CloseOn = closeOn.Format(time.RFC3339)
+	}
+
+	return utils.JsonSuccessResponse(c, "Settings retrieved", settings)
+}
+
+// SaveSettings updates application settings (admin only)
+func (ac *ApplicantController) SaveSettings(c *fiber.Ctx) error {
+	var req model.AppSettings
+
+	if err := c.BodyParser(&req); err != nil {
+		// Known error - invalid request body, no logging
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	ctx := context.Background()
+
+	var closeOn *time.Time
+	if req.CloseOn != "" {
+		parsedTime, err := time.Parse(time.RFC3339, req.CloseOn)
+		if err != nil {
+			// Known error - invalid date format, no logging
+			return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid date format")
+		}
+		closeOn = &parsedTime
+	}
+
+	_, err := ac.DB.Exec(ctx, `
+		UPDATE settings
+		SET applications_open = $1, close_on = $2, closure_message = $3
+		WHERE id = 1
+	`, req.ApplicationsOpen, closeOn, req.ClosureMessage)
+
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to update settings", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	return utils.JsonSuccessResponse(c, "Settings updated", req)
+}

@@ -1,0 +1,25 @@
+port: "9002"
+service_name: applicant-service
+database:
+  host: localhost
+  port: "5432"
+  user: postgres
+  password: postgres
+  dbname: qonics_db
+  sslmode: disable
+database_test:
+  host: 127.0.0.1
+  port: "5434"
+  user: postgres
+  password: postgres
+  dbname: qonics_test_db
+  sslmode: disable
+redis:
+  host: localhost
+  port: "6379"
+  password: ""
+  db: 0
+jwt:
+  secret: secret
+encryption:
+  key: secret

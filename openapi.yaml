@@ -1,0 +1,863 @@
+openapi: 3.0.0
+info:
+  title: Qonics Internship Application API
+  description: API for Qonics internship application management
+  version: 1.0.0
+  contact:
+    name: Qonics API Support
+    email: internships@qonics.com
+
+servers:
+  - url: http://localhost:8080
+    description: Local development (KrakenD Gateway)
+  - url: https://your-production-url.ondigitalocean.app
+    description: Production (DigitalOcean App Platform)
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        full_name:
+          type: string
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        role:
+          type: string
+          enum: [applicant, admin]
+
+    Session:
+      type: object
+      properties:
+        token:
+          type: string
+        user:
+          $ref: '#/components/schemas/User'
+
+    Error:
+      type: object
+      properties:
+        status:
+          type: integer
+        message:
+          type: string
+
+    ApplicantProfile:
+      type: object
+      properties:
+        id:
+          type: integer
+        full_name:
+          type: string
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        country:
+          type: string
+        city:
+          type: string
+        institution:
+          type: string
+        field_of_study:
+          type: string
+        qualification:
+          type: string
+        academic_status:
+          type: string
+        graduation_year:
+          type: integer
+        skills:
+          type: array
+          items:
+            type: string
+        bio:
+          type: string
+        github_url:
+          type: string
+          format: uri
+        linkedin_url:
+          type: string
+          format: uri
+        portfolio_url:
+          type: string
+          format: uri
+
+    Application:
+      type: object
+      properties:
+        id:
+          type: string
+        reference:
+          type: string
+        department:
+          type: string
+        specialization:
+          type: string
+        motivation:
+          type: string
+        experience:
+          type: string
+        start_date:
+          type: string
+          format: date-time
+        education_level:
+          type: string
+        session:
+          type: string
+        duration_months:
+          type: integer
+        work_mode:
+          type: string
+        status:
+          type: string
+          enum: [submitted, under_review, shortlisted, interview, accepted, rejected]
+        submitted_at:
+          type: string
+          format: date-time
+        interview_at:
+          type: string
+          format: date-time
+          nullable: true
+        history:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApplicationHistory'
+        notes:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApplicationNote'
+
+    ApplicationHistory:
+      type: object
+      properties:
+        status:
+          type: string
+        at:
+          type: string
+          format: date-time
+        note:
+          type: string
+
+    ApplicationNote:
+      type: object
+      properties:
+        id:
+          type: string
+        author:
+          type: string
+        text:
+          type: string
+        at:
+          type: string
+          format: date-time
+
+    Notification:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        message:
+          type: string
+        at:
+          type: string
+          format: date-time
+        read:
+          type: boolean
+
+    Booking:
+      type: object
+      properties:
+        session:
+          type: string
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        capacity:
+          type: integer
+        booked:
+          type: integer
+        available:
+          type: integer
+
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: Login user
+      description: Authenticate user with email and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  format: password
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/Session'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/register:
+    post:
+      tags:
+        - Authentication
+      summary: Register user
+      description: Create a new user account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - full_name
+                - email
+                - phone
+                - password
+              properties:
+                full_name:
+                  type: string
+                email:
+                  type: string
+                  format: email
+                phone:
+                  type: string
+                password:
+                  type: string
+                  format: password
+                  minLength: 8
+      responses:
+        '200':
+          description: Registration successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/Session'
+        '409':
+          description: Email already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/logout:
+    post:
+      tags:
+        - Authentication
+      summary: Logout user
+      description: Logout current user
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Logout successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/forgot-password:
+    post:
+      tags:
+        - Authentication
+      summary: Request password reset
+      description: Send password reset email
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Reset email sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/reset-password:
+    post:
+      tags:
+        - Authentication
+      summary: Reset password
+      description: Reset password with token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - token
+                - password
+              properties:
+                token:
+                  type: string
+                password:
+                  type: string
+                  format: password
+                  minLength: 8
+      responses:
+        '200':
+          description: Password reset successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/change-password:
+    post:
+      tags:
+        - Authentication
+      summary: Change password
+      description: Change current user's password
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - currentPassword
+                - newPassword
+              properties:
+                currentPassword:
+                  type: string
+                  format: password
+                newPassword:
+                  type: string
+                  format: password
+                  minLength: 8
+      responses:
+        '200':
+          description: Password changed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /applicant/profile:
+    get:
+      tags:
+        - Applicant
+      summary: Get profile
+      description: Get current user's profile
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Profile retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/ApplicantProfile'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Profile not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      tags:
+        - Applicant
+      summary: Update profile
+      description: Update current user's profile
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplicantProfile'
+      responses:
+        '200':
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/ApplicantProfile'
+
+  /notifications:
+    get:
+      tags:
+        - Notifications
+      summary: Get notifications
+      description: Get user's notifications
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Notifications retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Notification'
+
+  /notifications/read:
+    post:
+      tags:
+        - Notifications
+      summary: Mark notifications as read
+      description: Mark notifications as read
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - ids
+              properties:
+                ids:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Notifications marked as read
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /applications/mine:
+    get:
+      tags:
+        - Applications
+      summary: Get my applications
+      description: Get current user's applications
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Applications retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Application'
+
+  /applications:
+    get:
+      tags:
+        - Applications
+      summary: Get all applications
+      description: Get all applications (admin only)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Applications retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Application'
+    post:
+      tags:
+        - Applications
+      summary: Create application
+      description: Create a new application with document uploads
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - payload
+              properties:
+                payload:
+                  type: string
+                  format: binary
+                cv:
+                  type: string
+                  format: binary
+                cover_letter:
+                  type: string
+                  format: binary
+                transcript:
+                  type: string
+                  format: binary
+                portfolio:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Application created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/Application'
+
+  /applications/{id}:
+    get:
+      tags:
+        - Applications
+      summary: Get application
+      description: Get application by ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Application retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/Application'
+        '404':
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /applications/{id}/status:
+    patch:
+      tags:
+        - Applications
+      summary: Update status
+      description: Update application status (admin only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [submitted, under_review, shortlisted, interview, accepted, rejected]
+                note:
+                  type: string
+                interview_at:
+                  type: string
+                  format: date-time
+      responses:
+        '200':
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/Application'
+
+  /applications/{id}/notes:
+    post:
+      tags:
+        - Applications
+      summary: Add note
+      description: Add a note to application (admin only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - text
+              properties:
+                text:
+                  type: string
+      responses:
+        '200':
+          description: Note added
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/Application'
+
+  /applicants:
+    get:
+      tags:
+        - Admin
+      summary: Get all applicants
+      description: Get all applicants (admin only)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Applicants retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ApplicantProfile'
+
+  /settings:
+    get:
+      tags:
+        - Admin
+      summary: Get settings
+      description: Get application settings (admin only)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Settings retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                      application_open:
+                        type: boolean
+                      max_applications_per_user:
+                        type: integer
+                      notification_email:
+                        type: string
+                        format: email
+    put:
+      tags:
+        - Admin
+      summary: Update settings
+      description: Update application settings (admin only)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                application_open:
+                  type: boolean
+                max_applications_per_user:
+                  type: integer
+                notification_email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Settings updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                      application_open:
+                        type: boolean
+                      max_applications_per_user:
+                        type: integer
+                      notification_email:
+                        type: string
+                        format: email
+
+  /sessions/bookings:
+    get:
+      tags:
+        - Sessions
+      summary: Get session bookings
+      description: Get session availability for on-site/hybrid bookings
+      security: []
+      responses:
+        '200':
+          description: Bookings retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Booking'

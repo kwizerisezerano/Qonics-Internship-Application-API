@@ -1,0 +1,30 @@
+service:
+  name: notification-worker
+  port: 9000
+
+database:
+  host: localhost
+  port: 5432
+  user: postgres
+  password: postgres
+  dbname: qonics_db
+  sslmode: disable
+
+redis:
+  host: localhost
+  port: 6379
+  password: ""
+  db: 0
+
+jwt:
+  secret: secret
+
+encryption:
+  key: secret
+
+email:
+  host: smtp.gmail.com
+  port: 587
+  user: ""
+  password: ""
+  from: noreply@qonics.com

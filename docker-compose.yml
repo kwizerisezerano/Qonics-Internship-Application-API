@@ -1,0 +1,174 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: qonics-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: qonics_db
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+      ENCRYPTION_KEY: secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./libs/shared-package/migration:/migrations
+    networks:
+      - qonics-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: qonics-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - qonics-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  auth:
+    build:
+      context: .
+      dockerfile: ./services/auth/Dockerfile
+    container_name: qonics-auth
+    ports:
+      - "9001:9000"
+    environment:
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_USER=postgres
+      - DATABASE_PASSWORD=postgres
+      - DATABASE_DBNAME=qonics_db
+      - DATABASE_SSLMODE=disable
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - JWT_SECRET=secret
+      - ENCRYPTION_KEY=secret
+      - PORT=9000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - qonics-net
+    restart: unless-stopped
+
+  applicant:
+    build:
+      context: .
+      dockerfile: ./services/applicant/Dockerfile
+    container_name: qonics-applicant
+    ports:
+      - "9002:9000"
+    environment:
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_USER=postgres
+      - DATABASE_PASSWORD=postgres
+      - DATABASE_DBNAME=qonics_db
+      - DATABASE_SSLMODE=disable
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - JWT_SECRET=secret
+      - ENCRYPTION_KEY=secret
+      - PORT=9000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - qonics-net
+    restart: unless-stopped
+
+  application:
+    build:
+      context: .
+      dockerfile: ./services/application/Dockerfile
+    container_name: qonics-application
+    ports:
+      - "9003:9000"
+    environment:
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_USER=postgres
+      - DATABASE_PASSWORD=postgres
+      - DATABASE_DBNAME=qonics_db
+      - DATABASE_SSLMODE=disable
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - JWT_SECRET=secret
+      - ENCRYPTION_KEY=secret
+      - PORT=9000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - qonics-net
+    restart: unless-stopped
+
+  notification:
+    build:
+      context: .
+      dockerfile: ./services/notification/Dockerfile
+    container_name: qonics-notification
+    environment:
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_USER=postgres
+      - DATABASE_PASSWORD=postgres
+      - DATABASE_DBNAME=qonics_db
+      - DATABASE_SSLMODE=disable
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - REDIS_DB=0
+      - JWT_SECRET=secret
+      - ENCRYPTION_KEY=secret
+      - SMTP_HOST=smtp.gmail.com
+      - SMTP_PORT=587
+      - SMTP_USER=kwizerisezerano250@gmail.com
+      - SMTP_PASSWORD=esro lhjn rudk gfmh
+      - SMTP_FROM=kwizerisezerano250@gmail.com
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - qonics-net
+    restart: unless-stopped
+
+  krakend:
+    image: devopsfaith/krakend:latest
+    container_name: qonics-krakend
+    ports:
+      - "8080:8080"
+      - "8090:8090"
+    volumes:
+      - ./krakend.json:/etc/krakend/krakend.json
+    depends_on:
+      - auth
+      - applicant
+      - application
+    networks:
+      - qonics-net
+    restart: unless-stopped
+
+networks:
+  qonics-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
