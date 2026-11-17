@@ -259,12 +259,12 @@ paths:
             schema:
               type: object
               required:
-                - full_name
+                - fullName
                 - email
                 - phone
                 - password
               properties:
-                full_name:
+                fullName:
                   type: string
                 email:
                   type: string
