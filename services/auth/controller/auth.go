@@ -352,6 +352,11 @@ func (ac *AuthController) ChangePassword(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Current password is incorrect")
 	}
 
+	// Check if new password is different from current password
+	if req.NewPassword == req.CurrentPassword {
+		return utils.JsonErrorResponse(c, fiber.StatusNotAcceptable, "New password must be different from current password")
+	}
+
 	// Hash new password
 	newHashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {

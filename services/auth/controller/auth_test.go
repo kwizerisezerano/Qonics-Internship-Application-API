@@ -337,3 +337,73 @@ func TestLoginWrongPassword(t *testing.T) {
 	// Clean up
 	db.Exec(ctx, "DELETE FROM users WHERE email_hash = pgp_sym_decrypt(encrypt_data($1), current_setting('app.encryption_key', true))", email)
 }
+
+func TestChangePasswordSamePassword(t *testing.T) {
+	db, cfg, rdb := setupTestDB(t)
+	defer teardownTestDB(db, rdb)
+
+	ctx := context.Background()
+	timestamp := fmt.Sprintf("%d", time.Now().UnixNano())
+	email := fmt.Sprintf("samepass%s@example.com", timestamp)
+	fullName := fmt.Sprintf("Test User %s", timestamp)
+
+	app := fiber.New(fiber.Config{
+		AppName: "auth-service-test",
+	})
+
+	controller := NewAuthController(db, cfg, rdb)
+	app.Post("/api/v1/auth/register", controller.Register)
+	app.Post("/api/v1/auth/login", controller.Login)
+	app.Post("/api/v1/auth/change-password", controller.ChangePassword)
+
+	// Register a user
+	registerPayload := map[string]interface{}{
+		"full_name": fullName,
+		"email":     email,
+		"phone":     "+250788123456",
+		"password":  "password123",
+	}
+
+	payloadBytes, _ := json.Marshal(registerPayload)
+	req := httptest.NewRequest("POST", "/api/v1/auth/register", bytes.NewReader(payloadBytes))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req)
+	require.NoError(t, err)
+	require.Equal(t, 200, resp.StatusCode)
+
+	// Login to get token
+	loginPayload := map[string]interface{}{
+		"email":    email,
+		"password": "password123",
+	}
+
+	payloadBytes, _ = json.Marshal(loginPayload)
+	req = httptest.NewRequest("POST", "/api/v1/auth/login", bytes.NewReader(payloadBytes))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = app.Test(req)
+	require.NoError(t, err)
+	require.Equal(t, 200, resp.StatusCode)
+
+	var loginResponse map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&loginResponse)
+	token := loginResponse["data"].(map[string]interface{})["token"].(string)
+
+	// Try to change password to the same password
+	changePasswordPayload := map[string]interface{}{
+		"currentPassword": "password123",
+		"newPassword":     "password123",
+	}
+
+	payloadBytes, _ = json.Marshal(changePasswordPayload)
+	req = httptest.NewRequest("POST", "/api/v1/auth/change-password", bytes.NewReader(payloadBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err = app.Test(req)
+	require.NoError(t, err)
+
+	// Should return 406 (Not Acceptable) for same password
+	assert.Equal(t, 406, resp.StatusCode)
+
+	// Clean up
+	db.Exec(ctx, "DELETE FROM users WHERE email_hash = pgp_sym_decrypt(encrypt_data($1), current_setting('app.encryption_key', true))", email)
+}

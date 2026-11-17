@@ -7,6 +7,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/qonics/qonics-appy-api/libs/shared-package/config"
 	"github.com/qonics/qonics-appy-api/libs/shared-package/utils"
@@ -208,6 +209,21 @@ func (ac *ApplicationController) UpdateStatus(c *fiber.Ctx) error {
 
 	ctx := context.Background()
 
+	// Get current status
+	var currentStatus string
+	var currentInterviewAt *time.Time
+	err := ac.DB.QueryRow(ctx, "SELECT status, interview_at FROM applications WHERE id = $1", id).Scan(&currentStatus, &currentInterviewAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return utils.JsonErrorResponse(c, fiber.StatusNotFound, "Application not found")
+		}
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Database error", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
 	var interviewAt *time.Time
 	if req.InterviewAt != "" {
 		parsed, err := time.Parse(time.RFC3339, req.InterviewAt)
@@ -218,10 +234,19 @@ func (ac *ApplicationController) UpdateStatus(c *fiber.Ctx) error {
 		interviewAt = &parsed
 	}
 
+	// Check if status is actually changing
+	if currentStatus == req.Status {
+		// Compare interview timestamps
+		if (currentInterviewAt == nil && interviewAt == nil) ||
+			(currentInterviewAt != nil && interviewAt != nil && currentInterviewAt.Equal(*interviewAt)) {
+			return utils.JsonErrorResponse(c, fiber.StatusNotAcceptable, "Status is already set to this value")
+		}
+	}
+
 	// Update application status
-	_, err := ac.DB.Exec(ctx, `
+	_, err = ac.DB.Exec(ctx, `
 		UPDATE applications
-		SET status = $1, interview_at = $2
+		SET status = $1, interview_at = $2, updated_at = NOW()
 		WHERE id = $3
 	`, req.Status, interviewAt, id)
 

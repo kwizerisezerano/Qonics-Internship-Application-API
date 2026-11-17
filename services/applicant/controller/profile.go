@@ -121,6 +121,99 @@ func (ac *ApplicantController) SaveProfile(c *fiber.Ctx) error {
 	// Convert userID to int for database query
 	userIDInt := int(userID.(float64))
 
+	// Get existing profile to check for changes
+	var existingFullNameEncrypted, existingEmailEncrypted, existingPhoneEncrypted []byte
+	var existingSkillsArray []string
+	var existingCountry, existingCity, existingInstitution, existingFieldOfStudy string
+	var existingQualification, existingAcademicStatus string
+	var existingGraduationYear int
+	var existingBio, existingGithubUrl, existingLinkedinUrl, existingPortfolioUrl string
+
+	err := ac.DB.QueryRow(ctx, `
+		SELECT full_name_encrypted, email_encrypted, phone_encrypted,
+		       country, city, institution, field_of_study, qualification,
+		       academic_status, graduation_year, skills, bio,
+		       github_url, linkedin_url, portfolio_url
+		FROM applicant_profiles WHERE user_id = $1
+	`, userIDInt).Scan(
+		&existingFullNameEncrypted, &existingEmailEncrypted, &existingPhoneEncrypted,
+		&existingCountry, &existingCity, &existingInstitution, &existingFieldOfStudy,
+		&existingQualification, &existingAcademicStatus, &existingGraduationYear,
+		&existingSkillsArray, &existingBio, &existingGithubUrl, &existingLinkedinUrl, &existingPortfolioUrl,
+	)
+
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			// Profile doesn't exist yet, proceed with insert instead
+			// For now, return error - profile should be created on registration
+			return utils.JsonErrorResponse(c, fiber.StatusNotFound, "Profile not found")
+		}
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Database error", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	// Decrypt existing PII for comparison
+	existingFullName, _ := utils.DecryptData(ctx, ac.DB, existingFullNameEncrypted)
+	existingEmail, _ := utils.DecryptData(ctx, ac.DB, existingEmailEncrypted)
+	existingPhone, _ := utils.DecryptData(ctx, ac.DB, existingPhoneEncrypted)
+
+	// Check if any field is actually changing
+	changed := false
+	if existingFullName != req.FullName ||
+		existingEmail != req.Email ||
+		existingPhone != req.Phone ||
+		existingCountry != req.Country ||
+		existingCity != req.City ||
+		existingInstitution != req.Institution ||
+		existingFieldOfStudy != req.FieldOfStudy ||
+		existingQualification != req.Qualification ||
+		existingAcademicStatus != req.AcademicStatus {
+		changed = true
+	}
+
+	// Handle GraduationYear comparison (nullable int)
+	if !changed {
+		if req.GraduationYear == nil {
+			if existingGraduationYear != 0 {
+				changed = true
+			}
+		} else {
+			if existingGraduationYear != *req.GraduationYear {
+				changed = true
+			}
+		}
+	}
+
+	if !changed {
+		if existingBio != req.Bio ||
+			existingGithubUrl != req.GithubUrl ||
+			existingLinkedinUrl != req.LinkedinUrl ||
+			existingPortfolioUrl != req.PortfolioUrl {
+			changed = true
+		}
+	}
+
+	// Compare skills arrays
+	if !changed {
+		if len(existingSkillsArray) != len(req.Skills) {
+			changed = true
+		} else {
+			for i, skill := range existingSkillsArray {
+				if skill != req.Skills[i] {
+					changed = true
+					break
+				}
+			}
+		}
+	}
+
+	if !changed {
+		return utils.JsonErrorResponse(c, fiber.StatusNotAcceptable, "No changes detected in profile")
+	}
+
 	// Encrypt PII using pgcrypto
 	fullNameEncrypted, fullNameHash, err := utils.EncryptAndHash(ctx, ac.DB, req.FullName)
 	if err != nil {
@@ -159,7 +252,8 @@ func (ac *ApplicantController) SaveProfile(c *fiber.Ctx) error {
 		    field_of_study = $10, qualification = $11,
 		    academic_status = $12, graduation_year = $13,
 		    skills = $14, bio = $15,
-		    github_url = $16, linkedin_url = $17, portfolio_url = $18
+		    github_url = $16, linkedin_url = $17, portfolio_url = $18,
+		    updated_at = NOW()
 		WHERE user_id = $19
 	`, fullNameEncrypted, fullNameHash, emailEncrypted, emailHash,
 		phoneEncrypted, phoneHash, req.Country, req.City, req.Institution,
@@ -376,6 +470,24 @@ func (ac *ApplicantController) SaveSettings(c *fiber.Ctx) error {
 
 	ctx := context.Background()
 
+	// Get existing settings
+	var existingApplicationsOpen bool
+	var existingCloseOn *time.Time
+	var existingClosureMessage string
+
+	err := ac.DB.QueryRow(ctx, `
+		SELECT applications_open, close_on, closure_message
+		FROM settings WHERE id = 1
+	`).Scan(&existingApplicationsOpen, &existingCloseOn, &existingClosureMessage)
+
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Database error", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
 	var closeOn *time.Time
 	if req.CloseOn != "" {
 		parsedTime, err := time.Parse(time.RFC3339, req.CloseOn)
@@ -386,9 +498,27 @@ func (ac *ApplicantController) SaveSettings(c *fiber.Ctx) error {
 		closeOn = &parsedTime
 	}
 
-	_, err := ac.DB.Exec(ctx, `
+	// Check if any value is actually changing
+	changed := false
+	if existingApplicationsOpen != req.ApplicationsOpen ||
+		existingClosureMessage != req.ClosureMessage {
+		changed = true
+	}
+
+	// Compare close_on timestamps
+	if (existingCloseOn == nil && closeOn != nil) ||
+		(existingCloseOn != nil && closeOn == nil) ||
+		(existingCloseOn != nil && closeOn != nil && !existingCloseOn.Equal(*closeOn)) {
+		changed = true
+	}
+
+	if !changed {
+		return utils.JsonErrorResponse(c, fiber.StatusNotAcceptable, "No changes detected in settings")
+	}
+
+	_, err = ac.DB.Exec(ctx, `
 		UPDATE settings
-		SET applications_open = $1, close_on = $2, closure_message = $3
+		SET applications_open = $1, close_on = $2, closure_message = $3, updated_at = NOW()
 		WHERE id = 1
 	`, req.ApplicationsOpen, closeOn, req.ClosureMessage)
 
