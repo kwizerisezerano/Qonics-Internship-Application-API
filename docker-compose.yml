@@ -34,6 +34,37 @@ services:
       timeout: 5s
       retries: 5
 
+  migrate:
+    image: postgres:17-alpine
+    container_name: qonics-migrate
+    environment:
+      PGPASSWORD: postgres
+    volumes:
+      - ./libs/shared-package/migration:/migrations:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        set -e;
+        until pg_isready -h postgres -U postgres -d qonics_db; do sleep 1; done;
+        existing=$$(psql -h postgres -U postgres -d qonics_db -tAc "SELECT to_regclass('public.users')");
+        if [ "$$existing" = "users" ]; then
+          echo "Schema already initialized, skipping migrations.";
+        else
+          echo "Initializing qonics_db schema...";
+          for f in /migrations/*_up.sql; do
+            echo "Applying $$f";
+            psql -v ON_ERROR_STOP=1 -h postgres -U postgres -d qonics_db -f "$$f";
+          done;
+          psql -v ON_ERROR_STOP=1 -h postgres -U postgres -d qonics_db -f /migrations/seed_admin.sql;
+          echo "Schema initialized.";
+        fi
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - qonics-net
+    restart: "no"
+
   auth:
     build:
       context: .
@@ -58,6 +89,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks:
       - qonics-net
     restart: unless-stopped
@@ -86,6 +119,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks:
       - qonics-net
     restart: unless-stopped
@@ -116,6 +151,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks:
       - qonics-net
     restart: unless-stopped
@@ -148,6 +185,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks:
       - qonics-net
     restart: unless-stopped
@@ -177,6 +216,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks:
       - qonics-net
     restart: unless-stopped
