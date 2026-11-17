@@ -174,13 +174,11 @@ func (c *Config) InitDB() (*pgxpool.Pool, error) {
 		return nil, err
 	}
 
-	// Set encryption key for all connections
-	if utils.IsTestMode {
-		_, err = pool.Exec(ctx, "SET app.encryption_key = 'secret'")
-		if err != nil {
-			pool.Close()
-			return nil, err
-		}
+	// Set encryption key for all connections (matches migration functions)
+	_, err = pool.Exec(ctx, "SET app.encryption_key = 'secret'")
+	if err != nil {
+		pool.Close()
+		return nil, err
 	}
 
 	return pool, nil

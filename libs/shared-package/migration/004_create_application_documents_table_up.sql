@@ -1,7 +1,7 @@
 -- Create application_documents table
 CREATE TABLE IF NOT EXISTS application_documents (
     id VARCHAR(50) PRIMARY KEY,
-    application_id VARCHAR(50) NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    application_id VARCHAR(50) REFERENCES applications(id) ON DELETE CASCADE,
     document_type VARCHAR(50) NOT NULL CHECK (document_type IN ('cv', 'transcript', 'diploma', 'certificates', 'cover_letter')),
     file_name VARCHAR(255) NOT NULL,
     file_size BIGINT NOT NULL,

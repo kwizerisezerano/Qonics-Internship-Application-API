@@ -6,5 +6,6 @@ use (
 	./services/applicant
 	./services/application
 	./services/auth
+	./services/file
 	./services/notification
 )

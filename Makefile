@@ -1,7 +1,7 @@
 APP_BINARY = app-release
 POSTGRES_IMAGE = qonics-postgres-pgcrypto
 
-.PHONY: up up_build build down stop auth applicant application notification shared-package recreate_postgres_test test_db test
+.PHONY: up up_build build down stop auth applicant application notification file shared-package recreate_postgres_test test_db test
 
 ## up: starts all containers in the background without forcing build
 up:
@@ -10,7 +10,7 @@ up:
 	@echo "Docker images started"
 
 ## up_build: stops docker compose (if running), builds all projects with tests, and starts docker compose
-up_build: test_db shared-package auth applicant application notification
+up_build: test_db shared-package auth applicant application notification file
 	@echo "Stopping docker images (if running...)"
 	docker compose down
 	@echo "Building (when required) and starting docker images..."
@@ -65,6 +65,14 @@ notification:
 	cd ./services/notification && go mod tidy
 	cd ./services/notification && go test -v
 	cd ./services/notification && env GOOS=linux CGO_ENABLED=0 go build -o ${APP_BINARY} -buildvcs=false
+	@echo "Done!"
+
+## file: builds the file service binary and runs tests
+file:
+	@echo "Building file service binary..."
+	cd ./services/file && go mod tidy
+	cd ./services/file/controller && go test -v
+	cd ./services/file && env GOOS=linux CGO_ENABLED=0 go build -o ${APP_BINARY} -buildvcs=false
 	@echo "Done!"
 
 ## shared-package: test and verify the shared package

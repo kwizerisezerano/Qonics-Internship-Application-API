@@ -115,20 +115,21 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusUnauthorized, "Unauthorized")
 	}
 
+	ctx := context.Background()
+
 	var req model.NewApplicationPayload
+	var err error
 
 	if err := c.BodyParser(&req); err != nil {
 		// Known error - invalid request body, no logging
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	ctx := context.Background()
-
 	// Get applicant profile ID
 	var profileID string
 	// Convert userID to int for database query
 	userIDInt := int(userID.(float64))
-	err := ac.DB.QueryRow(ctx, "SELECT id FROM applicant_profiles WHERE user_id = $1", userIDInt).Scan(&profileID)
+	err = ac.DB.QueryRow(ctx, "SELECT id FROM applicant_profiles WHERE user_id = $1", userIDInt).Scan(&profileID)
 	if err != nil {
 		// Known error - profile not found, no logging
 		return utils.JsonErrorResponse(c, fiber.StatusNotFound, "Applicant profile not found")
@@ -140,8 +141,8 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 
 	var startDate *time.Time
 	if req.StartDate != "" {
-		parsed, err := time.Parse(time.RFC3339, req.StartDate)
-		if err != nil {
+		parsed, parseErr := time.Parse(time.RFC3339, req.StartDate)
+		if parseErr != nil {
 			// Known error - invalid date format, no logging
 			return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid date format")
 		}
@@ -164,6 +165,19 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 			Message:     err.Error(),
 			ServiceName: ac.Config.ServiceName,
 		})
+	}
+
+	// Link document records to application
+	for _, docID := range req.DocumentIDs {
+		_, err = ac.DB.Exec(ctx, `
+			UPDATE application_documents
+			SET application_id = $1
+			WHERE id = $2
+		`, appID, docID)
+
+		if err != nil {
+			fmt.Printf("WARNING: Failed to link document %s to application: %v\n", docID, err)
+		}
 	}
 
 	// Add initial history entry
@@ -435,7 +449,8 @@ func (ac *ApplicationController) fetchApplications(ctx context.Context, applican
 	for rows.Next() {
 		var app model.Application
 		var fullNameEncrypted, emailEncrypted, phoneEncrypted []byte
-		var startDate, submittedAt time.Time
+		var startDate *time.Time
+		var submittedAt time.Time
 		var interviewAt *time.Time
 
 		err := rows.Scan(
@@ -466,12 +481,14 @@ func (ac *ApplicationController) fetchApplications(ctx context.Context, applican
 			return nil, err
 		}
 
-		if !startDate.IsZero() {
-			app.StartDate = startDate.Format(time.RFC3339)
+		if startDate != nil {
+			dateStr := startDate.Format(time.RFC3339)
+			app.StartDate = &dateStr
 		}
 		app.SubmittedAt = submittedAt.Format(time.RFC3339)
 		if interviewAt != nil {
-			app.InterviewAt = interviewAt.Format(time.RFC3339)
+			interviewStr := interviewAt.Format(time.RFC3339)
+			app.InterviewAt = &interviewStr
 		}
 
 		// Fetch documents
