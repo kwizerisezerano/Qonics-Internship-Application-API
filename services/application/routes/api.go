@@ -16,10 +16,10 @@ func SetupRoutes(app *fiber.App, applicationController *controller.ApplicationCo
 	applications.Get("/mine", applicationController.ListMine)
 	applications.Post("/", applicationController.Create)
 	applications.Get("/:id", applicationController.Get)
-	applications.Patch("/:id/status", applicationController.UpdateStatus)
+	applications.Patch("/:id/status", applicationController.UpdateStatus, middleware.AdminMiddleware())
 	applications.Post("/:id/notes", applicationController.AddNote)
 
-	// Admin routes - check admin role in controller
+	// Admin routes
 	applications.Get("/", applicationController.ListAll)
 
 	// Public routes

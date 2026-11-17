@@ -211,8 +211,14 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 	return utils.JsonSuccessResponse(c, "Application created", applications[0])
 }
 
-// UpdateStatus updates the status of an application
+// UpdateStatus updates the status of an application (admin only)
 func (ac *ApplicationController) UpdateStatus(c *fiber.Ctx) error {
+	role := c.Locals("role")
+	if role != "admin" {
+		// Known error - forbidden, no logging
+		return utils.JsonErrorResponse(c, fiber.StatusForbidden, "Admin access required")
+	}
+
 	id := c.Params("id")
 	var req model.StatusUpdatePayload
 
@@ -324,6 +330,11 @@ func (ac *ApplicationController) AddNote(c *fiber.Ctx) error {
 	var req model.AddNoteRequest
 	author := c.Locals("email")
 
+	if author == nil {
+		// Known error - not authenticated, no logging
+		return utils.JsonErrorResponse(c, fiber.StatusUnauthorized, "Unauthorized")
+	}
+
 	if err := c.BodyParser(&req); err != nil {
 		// Known error - invalid request body, no logging
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
@@ -331,13 +342,45 @@ func (ac *ApplicationController) AddNote(c *fiber.Ctx) error {
 
 	ctx := context.Background()
 
-	noteID := uuid.New().String()
-	_, err := ac.DB.Exec(ctx, `
-		INSERT INTO review_notes (id, application_id, author, text)
-		VALUES ($1, $2, $3, $4)
-	`, noteID, id, author, req.Text)
+	// Convert author to string (from interface{})
+	authorStr, ok := author.(string)
+	if !ok {
+		// Known error - invalid author type, no logging
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Invalid author information")
+	}
+
+	// Check for duplicate note (same author, same application, same text)
+	var existingCount int
+	err := ac.DB.QueryRow(ctx, `
+		SELECT COUNT(id) FROM review_notes
+		WHERE application_id = $1 AND author = $2 AND text = $3
+	`, id, authorStr, req.Text).Scan(&existingCount)
 
 	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to check for duplicate note", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	if existingCount > 0 {
+		// Known error - duplicate note, no logging
+		return utils.JsonErrorResponse(c, fiber.StatusConflict, "This note already exists")
+	}
+
+	noteID := uuid.New().String()
+	_, err = ac.DB.Exec(ctx, `
+		INSERT INTO review_notes (id, application_id, author, text)
+		VALUES ($1, $2, $3, $4)
+	`, noteID, id, authorStr, req.Text)
+
+	if err != nil {
+		// Check for foreign key error - known error, no logging
+		if isFK, tableName := utils.IsForeignKeyErr(err); isFK {
+			return utils.JsonErrorResponse(c, fiber.StatusBadRequest, utils.GetForeignKeyMessage(tableName))
+		}
+		// Unknown error - log as critical
 		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to add note", utils.Logger{
 			LogLevel:    utils.CRITICAL,
 			Message:     err.Error(),
