@@ -354,7 +354,19 @@ func TestChangePasswordSamePassword(t *testing.T) {
 	controller := NewAuthController(db, cfg, rdb)
 	app.Post("/api/v1/auth/register", controller.Register)
 	app.Post("/api/v1/auth/login", controller.Login)
-	app.Post("/api/v1/auth/change-password", controller.ChangePassword)
+
+	// Add change-password with a simple test middleware that sets user_id
+	app.Post("/api/v1/auth/change-password", func(c *fiber.Ctx) error {
+		// For testing, extract user_id from the registered user
+		// We'll look up the user by email and set user_id in context
+		var userID int
+		err := db.QueryRow(context.Background(), "SELECT id FROM users WHERE email_hash = $1", utils.HashData(email)).Scan(&userID)
+		if err != nil {
+			return c.Status(401).JSON(fiber.Map{"status": 401, "message": "Unauthorized"})
+		}
+		c.Locals("user_id", userID)
+		return controller.ChangePassword(c)
+	})
 
 	// Register a user
 	registerPayload := map[string]interface{}{

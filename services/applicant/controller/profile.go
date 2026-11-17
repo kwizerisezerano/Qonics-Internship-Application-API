@@ -37,27 +37,29 @@ func (ac *ApplicantController) GetProfile(c *fiber.Ctx) error {
 
 	var profile model.ApplicantProfile
 	var fullNameEncrypted, emailEncrypted, phoneEncrypted []byte
-	var skillsArray []string
 
 	// Convert userID to int for database query
 	userIDInt := int(userID.(float64))
+
 	err := ac.DB.QueryRow(ctx, `
 		SELECT id, full_name_encrypted, email_encrypted, phone_encrypted,
-		       country, city, institution, field_of_study, qualification,
-		       academic_status, graduation_year, skills, bio,
-		       github_url, linkedin_url, portfolio_url
+		       COALESCE(country, ''), COALESCE(city, ''), COALESCE(institution, ''),
+		       COALESCE(field_of_study, ''), COALESCE(qualification, ''),
+		       COALESCE(academic_status, ''), graduation_year,
+		       COALESCE(skills, ARRAY[]::TEXT[]), COALESCE(bio, ''),
+		       COALESCE(github_url, ''), COALESCE(linkedin_url, ''), COALESCE(portfolio_url, '')
 		FROM applicant_profiles WHERE user_id = $1
 	`, userIDInt).Scan(
 		&profile.ID, &fullNameEncrypted, &emailEncrypted, &phoneEncrypted,
 		&profile.Country, &profile.City, &profile.Institution, &profile.FieldOfStudy,
 		&profile.Qualification, &profile.AcademicStatus, &profile.GraduationYear,
-		&skillsArray, &profile.Bio, &profile.GithubUrl, &profile.LinkedinUrl, &profile.PortfolioUrl,
+		&profile.Skills, &profile.Bio, &profile.GithubUrl, &profile.LinkedinUrl, &profile.PortfolioUrl,
 	)
 
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			// Known error - profile not found, no logging
-			return utils.JsonErrorResponse(c, fiber.StatusNotFound, "Profile not found")
+			return utils.JsonErrorResponse(c, fiber.StatusNotFound, "Applicant profile not found. Please complete your profile first.")
 		}
 		// Unknown error - log as critical
 		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Database error", utils.Logger{
@@ -95,8 +97,6 @@ func (ac *ApplicantController) GetProfile(c *fiber.Ctx) error {
 		})
 	}
 
-	profile.Skills = skillsArray
-
 	return utils.JsonSuccessResponse(c, "Profile retrieved", profile)
 }
 
@@ -126,14 +126,16 @@ func (ac *ApplicantController) SaveProfile(c *fiber.Ctx) error {
 	var existingSkillsArray []string
 	var existingCountry, existingCity, existingInstitution, existingFieldOfStudy string
 	var existingQualification, existingAcademicStatus string
-	var existingGraduationYear int
+	var existingGraduationYear *int
 	var existingBio, existingGithubUrl, existingLinkedinUrl, existingPortfolioUrl string
 
 	err := ac.DB.QueryRow(ctx, `
 		SELECT full_name_encrypted, email_encrypted, phone_encrypted,
-		       country, city, institution, field_of_study, qualification,
-		       academic_status, graduation_year, skills, bio,
-		       github_url, linkedin_url, portfolio_url
+		       COALESCE(country, ''), COALESCE(city, ''), COALESCE(institution, ''),
+		       COALESCE(field_of_study, ''), COALESCE(qualification, ''),
+		       COALESCE(academic_status, ''), graduation_year,
+		       COALESCE(skills, ARRAY[]::TEXT[]), COALESCE(bio, ''),
+		       COALESCE(github_url, ''), COALESCE(linkedin_url, ''), COALESCE(portfolio_url, '')
 		FROM applicant_profiles WHERE user_id = $1
 	`, userIDInt).Scan(
 		&existingFullNameEncrypted, &existingEmailEncrypted, &existingPhoneEncrypted,
@@ -176,14 +178,12 @@ func (ac *ApplicantController) SaveProfile(c *fiber.Ctx) error {
 
 	// Handle GraduationYear comparison (nullable int)
 	if !changed {
-		if req.GraduationYear == nil {
-			if existingGraduationYear != 0 {
-				changed = true
-			}
-		} else {
-			if existingGraduationYear != *req.GraduationYear {
-				changed = true
-			}
+		if req.GraduationYear == nil && existingGraduationYear != nil {
+			changed = true
+		} else if req.GraduationYear != nil && existingGraduationYear == nil {
+			changed = true
+		} else if req.GraduationYear != nil && existingGraduationYear != nil && *req.GraduationYear != *existingGraduationYear {
+			changed = true
 		}
 	}
 
@@ -242,17 +242,17 @@ func (ac *ApplicantController) SaveProfile(c *fiber.Ctx) error {
 		})
 	}
 
-	// Update profile
+	// Update profile (use NULL for empty strings to distinguish from set values)
 	_, err = ac.DB.Exec(ctx, `
 		UPDATE applicant_profiles
 		SET full_name_encrypted = $1, full_name_hash = $2,
 		    email_encrypted = $3, email_hash = $4,
 		    phone_encrypted = $5, phone_hash = $6,
-		    country = $7, city = $8, institution = $9,
-		    field_of_study = $10, qualification = $11,
-		    academic_status = $12, graduation_year = $13,
-		    skills = $14, bio = $15,
-		    github_url = $16, linkedin_url = $17, portfolio_url = $18,
+		    country = NULLIF($7, ''), city = NULLIF($8, ''), institution = NULLIF($9, ''),
+		    field_of_study = NULLIF($10, ''), qualification = NULLIF($11, ''),
+		    academic_status = NULLIF($12, ''), graduation_year = $13,
+		    skills = $14, bio = NULLIF($15, ''),
+		    github_url = NULLIF($16, ''), linkedin_url = NULLIF($17, ''), portfolio_url = NULLIF($18, ''),
 		    updated_at = NOW()
 		WHERE user_id = $19
 	`, fullNameEncrypted, fullNameHash, emailEncrypted, emailHash,
