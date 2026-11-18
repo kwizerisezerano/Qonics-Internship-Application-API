@@ -28,6 +28,46 @@ type ApplicantSummary struct {
 	Phone    string `json:"phone"`
 }
 
+// ApplicationSummary is the count-by-status breakdown of a set of applications.
+type ApplicationSummary struct {
+	Total       int `json:"total"`
+	Submitted   int `json:"submitted"`
+	UnderReview int `json:"under_review"`
+	Shortlisted int `json:"shortlisted"`
+	Interview   int `json:"interview"`
+	Accepted    int `json:"accepted"`
+	Rejected    int `json:"rejected"`
+}
+
+// MineResponse is the payload for GET /applications/mine: the caller's
+// applications plus their count-by-status summary.
+type MineResponse struct {
+	Applications []Application      `json:"applications"`
+	Summary      ApplicationSummary `json:"summary"`
+}
+
+// DepartmentCount is the number of applications for a single department.
+type DepartmentCount struct {
+	Department string `json:"department"`
+	Count      int    `json:"count"`
+}
+
+// TrendPoint is the number of applications submitted in a single month.
+type TrendPoint struct {
+	Month string `json:"month"`
+	Count int    `json:"count"`
+}
+
+// ListAllResponse is the payload for GET /applications (admin): every
+// application plus the dashboard aggregates (status summary, per-department
+// counts and the last six months trend).
+type ListAllResponse struct {
+	Applications []Application      `json:"applications"`
+	Summary      ApplicationSummary `json:"summary"`
+	ByDepartment []DepartmentCount  `json:"by_department"`
+	Trends       []TrendPoint       `json:"trends"`
+}
+
 type ApplicationDocument struct {
 	ID         string `json:"id"`
 	Type       string `json:"type"`

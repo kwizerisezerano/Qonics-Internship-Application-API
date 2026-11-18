@@ -59,7 +59,15 @@ func (ac *ApplicationController) ListMine(c *fiber.Ctx) error {
 		})
 	}
 
-	return utils.JsonSuccessResponse(c, "Applications retrieved", applications)
+	// Summarise the caller's applications by status for the dashboard.
+	if applications == nil {
+		applications = []model.Application{}
+	}
+
+	return utils.JsonSuccessResponse(c, "Applications retrieved", model.MineResponse{
+		Applications: applications,
+		Summary:      summarize(applications),
+	})
 }
 
 // ListAll returns all applications (admin only)
@@ -81,7 +89,17 @@ func (ac *ApplicationController) ListAll(c *fiber.Ctx) error {
 		})
 	}
 
-	return utils.JsonSuccessResponse(c, "Applications retrieved", applications)
+	if applications == nil {
+		applications = []model.Application{}
+	}
+
+	// Dashboard aggregates for the admin overview.
+	return utils.JsonSuccessResponse(c, "Applications retrieved", model.ListAllResponse{
+		Applications: applications,
+		Summary:      summarize(applications),
+		ByDepartment: departmentCounts(applications),
+		Trends:       monthlyTrend(applications, 6),
+	})
 }
 
 // Get returns a single application by ID
@@ -485,6 +503,74 @@ func (ac *ApplicationController) Availability(c *fiber.Ctx) error {
 	return utils.JsonSuccessResponse(c, "Availability retrieved", bookings)
 }
 
+// summarize counts applications by status.
+func summarize(applications []model.Application) model.ApplicationSummary {
+	summary := model.ApplicationSummary{Total: len(applications)}
+	for _, app := range applications {
+		switch app.Status {
+		case "submitted":
+			summary.Submitted++
+		case "under_review":
+			summary.UnderReview++
+		case "shortlisted":
+			summary.Shortlisted++
+		case "interview":
+			summary.Interview++
+		case "accepted":
+			summary.Accepted++
+		case "rejected":
+			summary.Rejected++
+		}
+	}
+	return summary
+}
+
+// departmentCounts groups applications by department, preserving first-seen order.
+func departmentCounts(applications []model.Application) []model.DepartmentCount {
+	counts := map[string]int{}
+	order := []string{}
+	for _, app := range applications {
+		if _, seen := counts[app.Department]; !seen {
+			order = append(order, app.Department)
+		}
+		counts[app.Department]++
+	}
+
+	result := make([]model.DepartmentCount, 0, len(order))
+	for _, department := range order {
+		result = append(result, model.DepartmentCount{Department: department, Count: counts[department]})
+	}
+	return result
+}
+
+// monthlyTrend counts applications submitted per month for the last `months`
+// months, oldest first, keyed on the short month name.
+func monthlyTrend(applications []model.Application, months int) []model.TrendPoint {
+	now := time.Now()
+	keys := make([]string, months)
+	points := make([]model.TrendPoint, months)
+	for i := 0; i < months; i++ {
+		d := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).AddDate(0, -(months - 1 - i), 0)
+		keys[i] = d.Format("2006-01")
+		points[i] = model.TrendPoint{Month: d.Format("Jan")}
+	}
+
+	for _, app := range applications {
+		submitted, err := time.Parse(time.RFC3339, app.SubmittedAt)
+		if err != nil {
+			continue
+		}
+		key := submitted.Format("2006-01")
+		for i := range keys {
+			if keys[i] == key {
+				points[i].Count++
+				break
+			}
+		}
+	}
+	return points
+}
+
 // Helper function to fetch applications with related data
 func (ac *ApplicationController) fetchApplications(ctx context.Context, applicantID string, applicationID string) ([]model.Application, error) {
 	query := `
@@ -611,7 +697,7 @@ func (ac *ApplicationController) fetchDocuments(ctx context.Context, application
 func (ac *ApplicationController) fetchHistory(ctx context.Context, applicationID string) ([]model.StatusEvent, error) {
 	rows, err := ac.DB.Query(ctx, `
 		SELECT status, at, note FROM application_history
-		WHERE application_id = $1 ORDER BY at ASC
+		WHERE application_id = $1 ORDER BY at DESC
 	`, applicationID)
 
 	if err != nil {

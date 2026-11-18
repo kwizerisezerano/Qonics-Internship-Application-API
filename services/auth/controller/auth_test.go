@@ -75,7 +75,7 @@ func TestRegister(t *testing.T) {
 	app.Post("/api/v1/auth/register", controller.Register)
 
 	registerPayload := map[string]interface{}{
-		"fullName": fullName,
+		"full_name": fullName,
 		"email":     email,
 		"phone":     "+250788123456",
 		"password":  "password123",
@@ -118,7 +118,7 @@ func TestRegisterDuplicateEmail(t *testing.T) {
 	app.Post("/api/v1/auth/register", controller.Register)
 
 	registerPayload := map[string]interface{}{
-		"fullName": fullName,
+		"full_name": fullName,
 		"email":     email,
 		"phone":     "+250788123456",
 		"password":  "password123",
@@ -158,7 +158,7 @@ func TestRegisterInvalidEmail(t *testing.T) {
 	app.Post("/api/v1/auth/register", controller.Register)
 
 	registerPayload := map[string]interface{}{
-		"fullName": "Test User",
+		"full_name": "Test User",
 		"email":     "invalid-email",
 		"phone":     "+250788123456",
 		"password":  "password123",
@@ -186,7 +186,7 @@ func TestRegisterShortPassword(t *testing.T) {
 	app.Post("/api/v1/auth/register", controller.Register)
 
 	registerPayload := map[string]interface{}{
-		"fullName": "Test User",
+		"full_name": "Test User",
 		"email":     "test@example.com",
 		"phone":     "+250788123456",
 		"password":  "short",
@@ -222,7 +222,7 @@ func TestLogin(t *testing.T) {
 
 	// First register a user
 	registerPayload := map[string]interface{}{
-		"fullName": fullName,
+		"full_name": fullName,
 		"email":     email,
 		"phone":     "+250788654321",
 		"password":  "password123",
@@ -306,7 +306,7 @@ func TestLoginWrongPassword(t *testing.T) {
 
 	// Register a user
 	registerPayload := map[string]interface{}{
-		"fullName": fullName,
+		"full_name": fullName,
 		"email":     email,
 		"phone":     "+250788123456",
 		"password":  "password123",
@@ -370,7 +370,7 @@ func TestChangePasswordSamePassword(t *testing.T) {
 
 	// Register a user
 	registerPayload := map[string]interface{}{
-		"fullName": fullName,
+		"full_name": fullName,
 		"email":     email,
 		"phone":     "+250788123456",
 		"password":  "password123",

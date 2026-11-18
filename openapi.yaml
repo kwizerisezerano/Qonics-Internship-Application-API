@@ -259,12 +259,12 @@ paths:
             schema:
               type: object
               required:
-                - fullName
+                - full_name
                 - email
                 - phone
                 - password
               properties:
-                fullName:
+                full_name:
                   type: string
                 email:
                   type: string
@@ -540,9 +540,29 @@ paths:
                   message:
                     type: string
                   data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Application'
+                    type: object
+                    properties:
+                      applications:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Application'
+                      summary:
+                        type: object
+                        properties:
+                          total:
+                            type: integer
+                          submitted:
+                            type: integer
+                          under_review:
+                            type: integer
+                          shortlisted:
+                            type: integer
+                          interview:
+                            type: integer
+                          accepted:
+                            type: integer
+                          rejected:
+                            type: integer
 
   /applications:
     get:
@@ -565,9 +585,47 @@ paths:
                   message:
                     type: string
                   data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Application'
+                    type: object
+                    properties:
+                      applications:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Application'
+                      summary:
+                        type: object
+                        properties:
+                          total:
+                            type: integer
+                          submitted:
+                            type: integer
+                          under_review:
+                            type: integer
+                          shortlisted:
+                            type: integer
+                          interview:
+                            type: integer
+                          accepted:
+                            type: integer
+                          rejected:
+                            type: integer
+                      by_department:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            department:
+                              type: string
+                            count:
+                              type: integer
+                      trends:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            month:
+                              type: string
+                            count:
+                              type: integer
     post:
       tags:
         - Applications

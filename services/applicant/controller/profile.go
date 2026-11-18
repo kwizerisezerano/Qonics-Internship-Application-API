@@ -278,9 +278,11 @@ func (ac *ApplicantController) ListApplicants(c *fiber.Ctx) error {
 
 	rows, err := ac.DB.Query(ctx, `
 		SELECT ap.id, ap.full_name_encrypted, ap.email_encrypted, ap.phone_encrypted,
-		       ap.country, ap.city, ap.institution, ap.field_of_study,
-		       ap.qualification, ap.academic_status, ap.graduation_year,
-		       ap.skills, ap.bio, ap.github_url, ap.linkedin_url, ap.portfolio_url,
+		       COALESCE(ap.country, ''), COALESCE(ap.city, ''), COALESCE(ap.institution, ''),
+		       COALESCE(ap.field_of_study, ''), COALESCE(ap.qualification, ''),
+		       COALESCE(ap.academic_status, ''), ap.graduation_year,
+		       COALESCE(ap.skills, ARRAY[]::TEXT[]), COALESCE(ap.bio, ''),
+		       COALESCE(ap.github_url, ''), COALESCE(ap.linkedin_url, ''), COALESCE(ap.portfolio_url, ''),
 		       u.created_at,
 		       COALESCE(COUNT(a.id), 0) as total_applications
 		FROM applicant_profiles ap
