@@ -39,3 +39,42 @@ func TestFormatValidationErrorsNonValidatorError(t *testing.T) {
 	assert.Nil(t, FormatValidationErrors(assert.AnError))
 	assert.Empty(t, FormatValidationErrors(validator.ValidationErrors{}))
 }
+
+// TestGeneralFieldValidators covers the leazi-style general rules carried by
+// NewValidator: name letters, free-text punctuation, phone format and
+// password strength.
+func TestGeneralFieldValidators(t *testing.T) {
+	type sample struct {
+		FullName    string `validate:"required,name"`
+		Institution string `validate:"omitempty,text"`
+		Phone       string `validate:"required,phone"`
+		Password    string `validate:"required,strong_password"`
+	}
+
+	v := NewValidator()
+
+	assert.NoError(t, v.Struct(sample{
+		FullName:    "Jean-Paul O'Brien",
+		Institution: "University of Rwanda, Kigali", // comma is allowed for text
+		Phone:       "+250 788-000-000",
+		Password:    "Str0ng@Pass",
+	}))
+
+	err := v.Struct(sample{
+		FullName:    "John123",
+		Institution: "Uni \U0001F600", // emoji
+		Phone:       "abc",
+		Password:    "weak",
+	})
+	assert.Error(t, err)
+
+	byKey := make(map[string]string)
+	for _, e := range FormatValidationErrors(err) {
+		byKey[e.Key] = e.Message
+	}
+
+	assert.Equal(t, "contains unsupported characters", byKey["full_name"])
+	assert.Equal(t, "contains unsupported characters", byKey["institution"])
+	assert.Equal(t, "must be a valid phone number", byKey["phone"])
+	assert.Contains(t, byKey["password"], "uppercase")
+}

@@ -1,6 +1,6 @@
 package model
 
-import "github.com/go-playground/validator/v10"
+import "github.com/qonics/qonics-appy-api/libs/shared-package/utils"
 
 type User struct {
 	ID       int    `json:"id"`
@@ -11,10 +11,10 @@ type User struct {
 }
 
 type RegisterRequest struct {
-	FullName string `json:"full_name" validate:"required"`
+	FullName string `json:"full_name" validate:"required,name"`
 	Email    string `json:"email" validate:"required,email"`
-	Phone    string `json:"phone" validate:"required"`
-	Password string `json:"password" validate:"required,min=8"`
+	Phone    string `json:"phone" validate:"required,phone"`
+	Password string `json:"password" validate:"required,strong_password"`
 }
 
 type LoginRequest struct {
@@ -33,12 +33,12 @@ type ForgotPasswordRequest struct {
 
 type ResetPasswordRequest struct {
 	Token    string `json:"token" validate:"required"`
-	Password string `json:"password" validate:"required,min=8"`
+	Password string `json:"password" validate:"required,strong_password"`
 }
 
 type ChangePasswordRequest struct {
 	CurrentPassword string `json:"currentPassword" validate:"required"`
-	NewPassword     string `json:"newPassword" validate:"required,min=8"`
+	NewPassword     string `json:"newPassword" validate:"required,strong_password"`
 }
 
-var Validate = validator.New()
+var Validate = utils.NewValidator()

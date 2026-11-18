@@ -1,21 +1,22 @@
 package model
 
-import "github.com/go-playground/validator/v10"
+import "github.com/qonics/qonics-appy-api/libs/shared-package/utils"
 
 // Validate is the validator used for incoming applicant payloads (profile,
-// settings, notifications).
-var Validate = validator.New()
+// settings, notifications). It carries the shared general rules (regex, phone,
+// strong_password).
+var Validate = utils.NewValidator()
 
 type ApplicantProfile struct {
 	ID             string   `json:"id"`
-	FullName       string   `json:"full_name" validate:"omitempty,max=150"`
+	FullName       string   `json:"full_name" validate:"omitempty,max=150,name"`
 	Email          string   `json:"email" validate:"omitempty,email"`
-	Phone          string   `json:"phone" validate:"omitempty,max=30"`
-	Country        string   `json:"country" validate:"omitempty,max=100"`
-	City           string   `json:"city" validate:"omitempty,max=100"`
-	Institution    string   `json:"institution" validate:"omitempty,max=200"`
-	FieldOfStudy   string   `json:"field_of_study" validate:"omitempty,max=200"`
-	Qualification  string   `json:"qualification" validate:"omitempty,max=200"`
+	Phone          string   `json:"phone" validate:"omitempty,max=30,phone"`
+	Country        string   `json:"country" validate:"omitempty,max=100,name"`
+	City           string   `json:"city" validate:"omitempty,max=100,name"`
+	Institution    string   `json:"institution" validate:"omitempty,max=200,text"`
+	FieldOfStudy   string   `json:"field_of_study" validate:"omitempty,max=200,text"`
+	Qualification  string   `json:"qualification" validate:"omitempty,max=200,text"`
 	AcademicStatus string   `json:"academic_status" validate:"omitempty,max=50"`
 	GraduationYear *int     `json:"graduation_year" validate:"omitempty,gte=1950,lte=2100"`
 	Skills         []string `json:"skills"`

@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/go-playground/validator/v10"
+	"github.com/qonics/qonics-appy-api/libs/shared-package/utils"
 )
 
 // Specializations is the canonical taxonomy: each department mapped to the
@@ -16,7 +17,7 @@ var Specializations = map[string][]string{
 
 // Validate is the validator used for incoming application payloads. In addition
 // to the struct tags it carries the custom `specialization` rule below.
-var Validate = validator.New()
+var Validate = utils.NewValidator()
 
 func init() {
 	// specialization passes only when the value belongs to the payload's

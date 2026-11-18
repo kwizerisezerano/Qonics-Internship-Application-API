@@ -1,12 +1,111 @@
 package utils
 
 import (
+	"regexp"
 	"strings"
 	"unicode"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 )
+
+// General field patterns, modelled on leazi's regex rules. They live in Go
+// regexp literals rather than struct tags because a tag value is run through
+// strconv.Unquote: escapes like `\-` are invalid there and silently drop the
+// whole tag, and a literal comma would split the tag into pieces.
+var (
+	// nameRegex accepts human names: letters (including accented ones) plus
+	// inner spaces, hyphens and apostrophes; it must start with a letter, so
+	// digits and symbols are rejected.
+	nameRegex = regexp.MustCompile(`^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ '\-]*$`)
+	// textRegex accepts letters, digits and common punctuation found in
+	// institution, field-of-study and qualification names.
+	textRegex = regexp.MustCompile(`^[A-Za-zÀ-ÿ0-9 .,&'()/\-]+$`)
+	// phoneRegex matches an international phone number once separators are
+	// stripped (see PhoneValidation).
+	phoneRegex = regexp.MustCompile(`^\+?[0-9]{7,15}$`)
+)
+
+// NewValidator returns a validator pre-loaded with the general field rules
+// shared across services (leazi-style): `name`, `text`, `regex`, `phone` and
+// `strong_password`.
+func NewValidator() *validator.Validate {
+	v := validator.New()
+	_ = v.RegisterValidation("name", NameValidation)
+	_ = v.RegisterValidation("text", TextValidation)
+	_ = v.RegisterValidation("regex", RegexValidation)
+	_ = v.RegisterValidation("phone", PhoneValidation)
+	_ = v.RegisterValidation("strong_password", IsStrongPassword)
+	return v
+}
+
+// NameValidation checks a value against nameRegex (letters, spaces, hyphens
+// and apostrophes only).
+func NameValidation(fl validator.FieldLevel) bool {
+	return nameRegex.MatchString(fl.Field().String())
+}
+
+// TextValidation checks a value against textRegex (letters, digits and common
+// punctuation).
+func TextValidation(fl validator.FieldLevel) bool {
+	return textRegex.MatchString(fl.Field().String())
+}
+
+// RegexValidation compiles the regular expression supplied in the struct tag
+// (e.g. `regex=^[0-9]+$`) and matches it against the field value. The pattern
+// must not contain a comma and must use only valid Go escape sequences, since
+// struct tags are unquoted before the validator sees them.
+func RegexValidation(fl validator.FieldLevel) bool {
+	re, err := regexp.Compile(fl.Param())
+	if err != nil {
+		return false
+	}
+	return re.MatchString(fl.Field().String())
+}
+
+// PhoneValidation accepts empty values (for optional fields) and otherwise
+// checks the number against an international pattern once separators are
+// removed, so formats like "+250 788-000-000" pass.
+func PhoneValidation(fl validator.FieldLevel) bool {
+	phone := fl.Field().String()
+	if phone == "" {
+		return true
+	}
+	cleaned := strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '-', '(', ')', '.':
+			return -1
+		}
+		return r
+	}, phone)
+	return phoneRegex.MatchString(cleaned)
+}
+
+// IsStrongPassword requires at least 8 characters with upper, lower, digit and
+// special characters, and rejects three successive identical characters.
+func IsStrongPassword(fl validator.FieldLevel) bool {
+	password := fl.Field().String()
+	if len(password) < 8 {
+		return false
+	}
+	var hasDigit, hasUpper, hasLower, hasSpecial bool
+	for i, char := range password {
+		switch {
+		case unicode.IsDigit(char):
+			hasDigit = true
+		case unicode.IsUpper(char):
+			hasUpper = true
+		case unicode.IsLower(char):
+			hasLower = true
+		case unicode.IsPunct(char) || unicode.IsSymbol(char):
+			hasSpecial = true
+		}
+		if i >= 2 && password[i] == password[i-1] && password[i-1] == password[i-2] {
+			return false
+		}
+	}
+	return hasDigit && hasUpper && hasLower && hasSpecial
+}
 
 // FieldError is a single field-level validation failure, keyed by the
 // snake_case name of the offending field (leazi-style).
@@ -73,6 +172,12 @@ func validationMessage(e validator.FieldError) string {
 		return "must be less than or equal to " + e.Param()
 	case "oneof":
 		return "must be one of: " + strings.ReplaceAll(e.Param(), " ", ", ")
+	case "name", "text", "regex":
+		return "contains unsupported characters"
+	case "phone":
+		return "must be a valid phone number"
+	case "strong_password":
+		return "must be at least 8 characters and include an uppercase letter, a lowercase letter, a digit and a symbol"
 	case "specialization":
 		return "must be a valid specialization for the selected department"
 	default:
