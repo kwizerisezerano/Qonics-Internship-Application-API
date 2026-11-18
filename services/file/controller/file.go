@@ -111,10 +111,9 @@ func (fc *FileController) GetPresignedURL(c *fiber.Ctx) error {
 }
 
 // ConfirmFileUpload confirms a successful upload: it verifies the caller owns
-// the pending record, that the object really exists in storage, then clears the
-// pending marker (deleted_at) and, when provided, attaches the file to its
-// owning record via the generic source_table / source_table_id pair plus extra
-// metadata.
+// the pending record, then clears the pending marker (deleted_at) and, when
+// provided, attaches the file to its owning record via the generic
+// source_table / source_table_id pair plus extra metadata.
 func (fc *FileController) ConfirmFileUpload(c *fiber.Ctx) error {
 	userID := c.Locals("user_id")
 	if userID == nil {
@@ -145,13 +144,13 @@ func (fc *FileController) ConfirmFileUpload(c *fiber.Ctx) error {
 	}
 
 	// Load the pending record and verify ownership.
-	var fileOwner, filePath string
+	var fileOwner string
 	var deletedAt *time.Time
 	err := fc.DB.QueryRow(ctx, `
-		SELECT COALESCE(owner_id, ''), file_path, deleted_at
+		SELECT COALESCE(owner_id, ''), deleted_at
 		FROM files
 		WHERE id = $1
-	`, request.FileID).Scan(&fileOwner, &filePath, &deletedAt)
+	`, request.FileID).Scan(&fileOwner, &deletedAt)
 
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -174,7 +173,44 @@ func (fc *FileController) ConfirmFileUpload(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusConflict, "File already confirmed")
 	}
 
-	// The object must actually exist in storage before we confirm it.
+	// Attach to owner (optional) and clear the pending marker, returning the
+	// final record so the confirm payload mirrors leazi's file response.
+	var extraArg interface{}
+	if request.Extra != nil {
+		extraArg = request.Extra
+	}
+
+	var file model.FileResponse
+	err = fc.DB.QueryRow(ctx, `
+		UPDATE files
+		SET deleted_at = NULL,
+		    uploaded_at = NOW(),
+		    source_table = COALESCE(NULLIF($1, ''), source_table),
+		    source_table_id = COALESCE(NULLIF($2, ''), source_table_id),
+		    description = COALESCE(NULLIF($3, ''), description),
+		    extra = COALESCE($4::jsonb, extra)
+		WHERE id = $5 AND owner_id = $6
+		RETURNING id, name, file_path, file_type, file_size,
+		          COALESCE(source_table, ''), COALESCE(source_table_id, ''),
+		          COALESCE(description, '')
+	`, request.SourceTable, request.SourceTableID, request.Description, extraArg, request.FileID, ownerID(c)).Scan(
+		&file.ID, &file.Name, &file.FilePath, &file.FileType, &file.FileSize,
+		&file.SourceTable, &file.SourceTableID, &file.Description,
+	)
+
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return utils.JsonErrorResponse(c, fiber.StatusNotFound, "File not found or not owned by caller")
+		}
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to confirm upload", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     fmt.Sprintf("ConfirmFileUpload: Failed to confirm upload: %v", err),
+			ServiceName: fc.Config.ServiceName,
+		})
+	}
+
+	// Generate a presigned URL so the client can access the confirmed file.
+	// Leazi-style: a URL-generation failure does not fail the confirmation.
 	r2Client, err := helper.R2ClientFactory()
 	if err != nil {
 		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to initialize storage client", utils.Logger{
@@ -184,50 +220,12 @@ func (fc *FileController) ConfirmFileUpload(c *fiber.Ctx) error {
 		})
 	}
 
-	exists, err := r2Client.HeadObject(filePath)
+	file.URL, err = r2Client.GeneratePresignedGetURL(file.FilePath)
 	if err != nil {
-		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to verify uploaded object", utils.Logger{
-			LogLevel:    utils.CRITICAL,
-			Message:     fmt.Sprintf("ConfirmFileUpload: Failed to head object: %v", err),
-			ServiceName: fc.Config.ServiceName,
-		})
-	}
-	if !exists {
-		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Uploaded object not found in storage")
+		file.URL = ""
 	}
 
-	// Attach to owner (optional) and clear the pending marker.
-	var extraArg interface{}
-	if request.Extra != nil {
-		extraArg = request.Extra
-	}
-
-	result, err := fc.DB.Exec(ctx, `
-		UPDATE files
-		SET deleted_at = NULL,
-		    uploaded_at = NOW(),
-		    source_table = COALESCE(NULLIF($1, ''), source_table),
-		    source_table_id = COALESCE(NULLIF($2, ''), source_table_id),
-		    description = COALESCE(NULLIF($3, ''), description),
-		    extra = COALESCE($4::jsonb, extra)
-		WHERE id = $5 AND owner_id = $6
-	`, request.SourceTable, request.SourceTableID, request.Description, extraArg, request.FileID, ownerID(c))
-
-	if err != nil {
-		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to confirm upload", utils.Logger{
-			LogLevel:    utils.CRITICAL,
-			Message:     fmt.Sprintf("ConfirmFileUpload: Failed to confirm upload: %v", err),
-			ServiceName: fc.Config.ServiceName,
-		})
-	}
-
-	if result.RowsAffected() == 0 {
-		return utils.JsonErrorResponse(c, fiber.StatusNotFound, "File not found or not owned by caller")
-	}
-
-	return utils.JsonSuccessResponse(c, "Upload confirmed", fiber.Map{
-		"file_id": request.FileID,
-	})
+	return utils.JsonSuccessResponse(c, "Upload confirmed", file)
 }
 
 // GetFileURL returns a short-lived presigned URL to download a file.

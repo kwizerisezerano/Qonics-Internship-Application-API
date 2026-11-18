@@ -114,7 +114,6 @@
               },
               "example": {
                 "file_id": "8f2c1d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f",
-                "object_key": "files/cv/9f1c2ab3-dd44-4e55-8f66-7708990aabbc-kwizera-cv.pdf",
                 "source_table": "applications",
                 "source_table_id": "app_01HZX9K2M4",
                 "description": "My updated CV",
@@ -138,14 +137,22 @@
                   "status": 200,
                   "message": "Upload confirmed",
                   "data": {
-                    "file_id": "8f2c1d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f"
+                    "id": "8f2c1d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f",
+                    "name": "kwizera-cv.pdf",
+                    "file_path": "uploads/9f1c2ab3-dd44-4e55-8f66-7708990aabbc.pdf",
+                    "file_type": "cv",
+                    "file_size": 204800,
+                    "url": "https://<account>.r2.cloudflarestorage.com/leazi/uploads/9f1c2ab3....pdf?X-Amz-Signature=...",
+                    "source_table": "applications",
+                    "source_table_id": "3b1f9c2a-7d4e-4a1b-9c8f-2e5d6f7a8b9c",
+                    "description": "e2e test cv"
                   }
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid request format or validation failed",
+            "description": "Invalid request format, validation failed, invalid source table, or mismatched source_table/source_table_id pair",
             "content": {
               "application/json": {
                 "schema": {
@@ -164,8 +171,28 @@
               }
             }
           },
+          "403": {
+            "description": "File ownership mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "404": {
-            "description": "File record not found or already confirmed",
+            "description": "File record not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "File already confirmed",
             "content": {
               "application/json": {
                 "schema": {
@@ -323,17 +350,14 @@
       },
       "ConfirmUploadRequest": {
         "type": "object",
-        "required": ["file_id", "object_key"],
+        "required": ["file_id"],
         "properties": {
           "file_id": {
             "type": "string"
           },
-          "object_key": {
-            "type": "string"
-          },
           "source_table": {
             "type": "string",
-            "description": "Optional owning table name, e.g. applications",
+            "description": "Optional owning table name; must be a known source table and supplied together with source_table_id",
             "example": "applications"
           },
           "source_table_id": {
@@ -366,6 +390,42 @@
           }
         }
       },
+      "FileData": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "file_path": {
+            "type": "string",
+            "description": "R2 object key"
+          },
+          "file_type": {
+            "type": "string"
+          },
+          "file_size": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Short-lived presigned download URL"
+          },
+          "source_table": {
+            "type": "string"
+          },
+          "source_table_id": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      },
       "ConfirmUploadEnvelope": {
         "type": "object",
         "properties": {
@@ -377,12 +437,7 @@
             "type": "string"
           },
           "data": {
-            "type": "object",
-            "properties": {
-              "file_id": {
-                "type": "string"
-              }
-            }
+            "$ref": "#/components/schemas/FileData"
           }
         }
       },

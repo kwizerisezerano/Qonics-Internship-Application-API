@@ -2,18 +2,15 @@ package helper
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/google/uuid"
 	"github.com/spf13/viper"
 )
@@ -109,29 +106,6 @@ func (r *R2Client) GeneratePresignedGetURL(objectKey string) (string, error) {
 	}
 
 	return presignedReq.URL, nil
-}
-
-// HeadObject checks whether an object exists in R2. It reports (true, nil)
-// when the object is present, (false, nil) when it is missing, and
-// (false, err) for any other storage error.
-func (r *R2Client) HeadObject(objectKey string) (bool, error) {
-	_, err := r.Client.HeadObject(context.TODO(), &s3.HeadObjectInput{
-		Bucket: aws.String(r.BucketName),
-		Key:    aws.String(objectKey),
-	})
-	if err != nil {
-		var notFound *types.NotFound
-		if errors.As(err, &notFound) {
-			return false, nil
-		}
-		var respErr *awshttp.ResponseError
-		if errors.As(err, &respErr) && respErr.HTTPStatusCode() == 404 {
-			return false, nil
-		}
-		return false, fmt.Errorf("failed to head object: %v", err)
-	}
-
-	return true, nil
 }
 
 // DeleteObject deletes an object from R2
