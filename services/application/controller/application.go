@@ -135,6 +135,30 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusNotFound, "Applicant profile not found")
 	}
 
+	// Verify every referenced document belongs to the caller and is confirmed
+	// before the application is created (leazi-style ownership guard).
+	ownerIDStr := fmt.Sprintf("%v", userID)
+	for _, docID := range req.DocumentIDs {
+		var owned bool
+		err = ac.DB.QueryRow(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM files
+				WHERE id = $1 AND owner_id = $2 AND deleted_at IS NULL
+			)
+		`, docID, ownerIDStr).Scan(&owned)
+
+		if err != nil {
+			return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to verify documents", utils.Logger{
+				LogLevel:    utils.CRITICAL,
+				Message:     err.Error(),
+				ServiceName: ac.Config.ServiceName,
+			})
+		}
+		if !owned {
+			return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid or unconfirmed document")
+		}
+	}
+
 	// Generate reference
 	reference := fmt.Sprintf("APP-%d", time.Now().Unix())
 	appID := uuid.New().String()
@@ -167,16 +191,22 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		})
 	}
 
-	// Link document records to application (generic source_table/source_table_id pair)
+	// Link document records to application (generic source_table/source_table_id pair).
+	// Ownership is re-asserted in the WHERE clause so a file can never be
+	// attached by anyone other than its owner.
 	for _, docID := range req.DocumentIDs {
-		_, err = ac.DB.Exec(ctx, `
+		result, err := ac.DB.Exec(ctx, `
 			UPDATE files
 			SET source_table = 'applications', source_table_id = $1
-			WHERE id = $2
-		`, appID, docID)
+			WHERE id = $2 AND owner_id = $3 AND deleted_at IS NULL
+		`, appID, docID, ownerIDStr)
 
 		if err != nil {
 			fmt.Printf("WARNING: Failed to link document %s to application: %v\n", docID, err)
+			continue
+		}
+		if result.RowsAffected() == 0 {
+			fmt.Printf("WARNING: Document %s was not linked (not owned or not confirmed)\n", docID)
 		}
 	}
 

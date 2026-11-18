@@ -110,9 +110,11 @@ func (fc *FileController) GetPresignedURL(c *fiber.Ctx) error {
 	})
 }
 
-// ConfirmFileUpload confirms a successful upload: it clears the pending marker
-// (deleted_at) and, when provided, attaches the file to its owning record via
-// the generic source_table / source_table_id pair plus extra metadata.
+// ConfirmFileUpload confirms a successful upload: it verifies the caller owns
+// the pending record, that the object really exists in storage, then clears the
+// pending marker (deleted_at) and, when provided, attaches the file to its
+// owning record via the generic source_table / source_table_id pair plus extra
+// metadata.
 func (fc *FileController) ConfirmFileUpload(c *fiber.Ctx) error {
 	userID := c.Locals("user_id")
 	if userID == nil {
@@ -131,22 +133,67 @@ func (fc *FileController) ConfirmFileUpload(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Validation failed")
 	}
 
-	// Verify the file exists, belongs to the caller and is still pending.
-	var existingID string
+	// Only known source tables may own a file (leazi-style allow-list).
+	if request.SourceTable != "" && !utils.In_array(utils.AvailableSourceTable, request.SourceTable) {
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid source table")
+	}
+
+	// source_table and source_table_id must be supplied together (or neither).
+	if (request.SourceTable != "" && request.SourceTableID == "") ||
+		(request.SourceTable == "" && request.SourceTableID != "") {
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "source_table and source_table_id must be provided together")
+	}
+
+	// Load the pending record and verify ownership.
+	var fileOwner, filePath string
+	var deletedAt *time.Time
 	err := fc.DB.QueryRow(ctx, `
-		SELECT id FROM files
-		WHERE id = $1 AND file_path = $2 AND owner_id = $3 AND deleted_at IS NOT NULL
-	`, request.FileID, request.ObjectKey, ownerID(c)).Scan(&existingID)
+		SELECT COALESCE(owner_id, ''), file_path, deleted_at
+		FROM files
+		WHERE id = $1
+	`, request.FileID).Scan(&fileOwner, &filePath, &deletedAt)
 
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return utils.JsonErrorResponse(c, fiber.StatusNotFound, "File record not found or already confirmed")
+			return utils.JsonErrorResponse(c, fiber.StatusNotFound, "File record not found")
 		}
-		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to confirm upload", utils.Logger{
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to verify file", utils.Logger{
 			LogLevel:    utils.CRITICAL,
-			Message:     fmt.Sprintf("ConfirmFileUpload: Failed to lookup file record: %v", err),
+			Message:     fmt.Sprintf("ConfirmFileUpload: Failed to verify file: %v", err),
 			ServiceName: fc.Config.ServiceName,
 		})
+	}
+
+	// Confirm the file belongs to the caller (leazi-style ownership check).
+	if fileOwner == "" || fileOwner != ownerID(c) {
+		return utils.JsonErrorResponse(c, fiber.StatusForbidden, "File ownership mismatch")
+	}
+
+	// A cleared deleted_at means the upload was already confirmed.
+	if deletedAt == nil {
+		return utils.JsonErrorResponse(c, fiber.StatusConflict, "File already confirmed")
+	}
+
+	// The object must actually exist in storage before we confirm it.
+	r2Client, err := helper.R2ClientFactory()
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to initialize storage client", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     fmt.Sprintf("ConfirmFileUpload: Failed to initialize R2 client: %v", err),
+			ServiceName: fc.Config.ServiceName,
+		})
+	}
+
+	exists, err := r2Client.HeadObject(filePath)
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to verify uploaded object", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     fmt.Sprintf("ConfirmFileUpload: Failed to head object: %v", err),
+			ServiceName: fc.Config.ServiceName,
+		})
+	}
+	if !exists {
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Uploaded object not found in storage")
 	}
 
 	// Attach to owner (optional) and clear the pending marker.
@@ -155,7 +202,7 @@ func (fc *FileController) ConfirmFileUpload(c *fiber.Ctx) error {
 		extraArg = request.Extra
 	}
 
-	_, err = fc.DB.Exec(ctx, `
+	result, err := fc.DB.Exec(ctx, `
 		UPDATE files
 		SET deleted_at = NULL,
 		    uploaded_at = NOW(),
@@ -163,8 +210,8 @@ func (fc *FileController) ConfirmFileUpload(c *fiber.Ctx) error {
 		    source_table_id = COALESCE(NULLIF($2, ''), source_table_id),
 		    description = COALESCE(NULLIF($3, ''), description),
 		    extra = COALESCE($4::jsonb, extra)
-		WHERE id = $5
-	`, request.SourceTable, request.SourceTableID, request.Description, extraArg, request.FileID)
+		WHERE id = $5 AND owner_id = $6
+	`, request.SourceTable, request.SourceTableID, request.Description, extraArg, request.FileID, ownerID(c))
 
 	if err != nil {
 		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to confirm upload", utils.Logger{
@@ -172,6 +219,10 @@ func (fc *FileController) ConfirmFileUpload(c *fiber.Ctx) error {
 			Message:     fmt.Sprintf("ConfirmFileUpload: Failed to confirm upload: %v", err),
 			ServiceName: fc.Config.ServiceName,
 		})
+	}
+
+	if result.RowsAffected() == 0 {
+		return utils.JsonErrorResponse(c, fiber.StatusNotFound, "File not found or not owned by caller")
 	}
 
 	return utils.JsonSuccessResponse(c, "Upload confirmed", fiber.Map{
