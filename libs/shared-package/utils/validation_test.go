@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestFormatValidationErrors covers the field-level error payload: snake_case
@@ -144,8 +145,10 @@ func TestTextValidation(t *testing.T) {
 	}
 }
 
-// TestPhoneValidation covers the `phone` rule. Empty values are allowed so the
-// tag can be used on optional fields alongside `omitempty`.
+// TestPhoneValidation covers the `phone` rule, which accepts any of the leazi
+// supported formats (E164, NANP, European, Asian, generic international).
+// Empty values are allowed so the tag can be used on optional fields alongside
+// `omitempty`.
 func TestPhoneValidation(t *testing.T) {
 	v := NewValidator()
 	cases := []struct {
@@ -153,14 +156,20 @@ func TestPhoneValidation(t *testing.T) {
 		value   string
 		wantErr bool
 	}{
-		{"international", "+250788000000", false},
-		{"with separators", "+250 788-000-000", false},
+		{"e164 rwanda", "+250788000000", false},
+		{"international with separators", "+250 788-000-000", false},
 		{"local ten digits", "0788000000", false},
-		{"parens and dots", "(078) 800.0000", false},
+		{"nanp parens and dots", "(078) 800.0000", false},
+		{"nanp us format", "+1 (555) 123-4567", false},
+		{"european format", "+44 20 7946 0958", false},
+		{"asian format", "+81 90 1234 5678", false},
 		{"empty allowed", "", false},
 		{"too short", "12345", true},
+		{"too long", "+1234567890123456", true},
 		{"letters", "abc", true},
 		{"symbols", "+250-ABC", true},
+		{"only a plus", "+", true},
+		{"whitespace only", "   ", true},
 	}
 
 	for _, tc := range cases {
@@ -173,6 +182,33 @@ func TestPhoneValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPhoneValidatorNormalization covers the PhoneValidator used behind the
+// `phone` rule: it reports the detected format and normalises the number to
+// E.164 (10-digit numbers with no country code become NANP +1).
+func TestPhoneValidatorNormalization(t *testing.T) {
+	v, err := NewPhoneValidator()
+	require.NoError(t, err)
+
+	result := v.Validate("+250788000000", nil)
+	assert.True(t, result.IsValid)
+	assert.Equal(t, "+250788000000", result.E164)
+
+	result = v.Validate("+250 788-000-000", nil)
+	assert.True(t, result.IsValid)
+	assert.Equal(t, FormatInternational, result.Format)
+	assert.Equal(t, "+250788000000", result.E164)
+
+	result = v.Validate("(555) 123-4567", nil)
+	assert.True(t, result.IsValid)
+	assert.Equal(t, FormatNANP, result.Format)
+	assert.Equal(t, "+15551234567", result.E164)
+	assert.Equal(t, "+1 (555) 123-4567", result.Normalized)
+
+	invalid := v.Validate("not-a-phone", nil)
+	assert.False(t, invalid.IsValid)
+	assert.NotEmpty(t, invalid.ErrorMessage)
 }
 
 // TestStrongPasswordValidation covers the `strong_password` rule: at least 8

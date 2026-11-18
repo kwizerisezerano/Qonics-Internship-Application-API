@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -21,7 +20,10 @@ type FileController struct {
 	Config *config.Config
 }
 
-var Validate = validator.New()
+// Validate is the validator used for incoming file payloads. It is the shared
+// validator so the general rules (name, text, regex, phone, strong_password)
+// are available, leazi-style.
+var Validate = utils.NewValidator()
 
 // pendingTTL is how long an uploaded but unconfirmed file is kept before the
 // cleanup worker removes it (leazi-style orphan protection).

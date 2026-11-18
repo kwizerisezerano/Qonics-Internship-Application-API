@@ -19,7 +19,7 @@ type ApplicantProfile struct {
 	Qualification  string   `json:"qualification" validate:"omitempty,max=200,text"`
 	AcademicStatus string   `json:"academic_status" validate:"omitempty,max=50"`
 	GraduationYear *int     `json:"graduation_year" validate:"omitempty,gte=1950,lte=2100"`
-	Skills         []string `json:"skills"`
+	Skills         []string `json:"skills" validate:"omitempty,dive,max=50"`
 	Bio            string   `json:"bio" validate:"omitempty,max=2000"`
 	GithubUrl      string   `json:"github_url" validate:"omitempty,url"`
 	LinkedinUrl    string   `json:"linkedin_url" validate:"omitempty,url"`
@@ -47,7 +47,7 @@ type AppSettings struct {
 }
 
 type MarkNotificationsReadRequest struct {
-	IDs []string `json:"ids" validate:"required"`
+	IDs []string `json:"ids" validate:"required,min=1,dive,uuid"`
 }
 
 // ApplicantFilter is the query contract for GET /applicants (admin). The tagged
@@ -68,9 +68,9 @@ type ApplicantFilter struct {
 
 // NotificationFilter is the query contract for GET /applicant/notifications.
 type NotificationFilter struct {
-	Page   int   `query:"page"`
-	Limit  int   `query:"limit"`
-	Read   *bool `query:"read" field:"n.read" op:"="`
+	Page   int    `query:"page"`
+	Limit  int    `query:"limit"`
+	Read   *bool  `query:"read" field:"n.read" op:"="`
 	Search string `query:"search"`
 
 	// UserID scopes the list to the caller; set in the controller.

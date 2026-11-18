@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -91,6 +92,24 @@ func TestApplicantProfileValidation(t *testing.T) {
 		p.FullName = strings.Repeat("a", 151)
 		assert.Error(t, Validate.Struct(&p))
 	})
+
+	t.Run("accepts valid skills", func(t *testing.T) {
+		p := base()
+		p.Skills = []string{"Go", "PostgreSQL"}
+		assert.NoError(t, Validate.Struct(&p))
+	})
+
+	t.Run("rejects over-long skill", func(t *testing.T) {
+		p := base()
+		p.Skills = []string{strings.Repeat("a", 51)}
+		assert.Error(t, Validate.Struct(&p))
+	})
+
+	t.Run("rejects over-long bio", func(t *testing.T) {
+		p := base()
+		p.Bio = strings.Repeat("a", 2001)
+		assert.Error(t, Validate.Struct(&p))
+	})
 }
 
 // TestAppSettingsValidation covers the closure message length limit.
@@ -109,10 +128,14 @@ func TestAppSettingsValidation(t *testing.T) {
 // TestMarkNotificationsReadValidation covers the required ids list.
 func TestMarkNotificationsReadValidation(t *testing.T) {
 	t.Run("valid", func(t *testing.T) {
-		assert.NoError(t, Validate.Struct(&MarkNotificationsReadRequest{IDs: []string{"1", "2"}}))
+		assert.NoError(t, Validate.Struct(&MarkNotificationsReadRequest{IDs: []string{uuid.NewString(), uuid.NewString()}}))
 	})
 
 	t.Run("rejects nil ids", func(t *testing.T) {
 		assert.Error(t, Validate.Struct(&MarkNotificationsReadRequest{}))
+	})
+
+	t.Run("rejects non-uuid ids", func(t *testing.T) {
+		assert.Error(t, Validate.Struct(&MarkNotificationsReadRequest{IDs: []string{"1", "2"}}))
 	})
 }

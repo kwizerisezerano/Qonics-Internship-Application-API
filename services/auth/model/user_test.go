@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -44,6 +45,18 @@ func TestRegisterRequestValidation(t *testing.T) {
 	t.Run("rejects weak password", func(t *testing.T) {
 		req := base()
 		req.Password = "password123"
+		assert.Error(t, Validate.Struct(&req))
+	})
+
+	t.Run("rejects full name over max length", func(t *testing.T) {
+		req := base()
+		req.FullName = strings.Repeat("a", 151)
+		assert.Error(t, Validate.Struct(&req))
+	})
+
+	t.Run("rejects phone over max length", func(t *testing.T) {
+		req := base()
+		req.Phone = "+" + strings.Repeat("1", 30)
 		assert.Error(t, Validate.Struct(&req))
 	})
 

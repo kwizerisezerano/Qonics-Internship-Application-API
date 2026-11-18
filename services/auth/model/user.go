@@ -11,9 +11,9 @@ type User struct {
 }
 
 type RegisterRequest struct {
-	FullName string `json:"full_name" validate:"required,name"`
+	FullName string `json:"full_name" validate:"required,max=150,name"`
 	Email    string `json:"email" validate:"required,email"`
-	Phone    string `json:"phone" validate:"required,phone"`
+	Phone    string `json:"phone" validate:"required,max=30,phone"`
 	Password string `json:"password" validate:"required,strong_password"`
 }
 

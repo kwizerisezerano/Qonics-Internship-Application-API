@@ -21,9 +21,6 @@ var (
 	// textRegex accepts letters, digits and common punctuation found in
 	// institution, field-of-study and qualification names.
 	textRegex = regexp.MustCompile(`^[A-Za-zÀ-ÿ0-9 .,&'()/\-]+$`)
-	// phoneRegex matches an international phone number once separators are
-	// stripped (see PhoneValidation).
-	phoneRegex = regexp.MustCompile(`^\+?[0-9]{7,15}$`)
 )
 
 // NewValidator returns a validator pre-loaded with the general field rules
@@ -64,21 +61,14 @@ func RegexValidation(fl validator.FieldLevel) bool {
 }
 
 // PhoneValidation accepts empty values (for optional fields) and otherwise
-// checks the number against an international pattern once separators are
-// removed, so formats like "+250 788-000-000" pass.
+// checks the number against the leazi phone formats (E164, NANP, European,
+// Asian and a generic international pattern) via ValidatePhone.
 func PhoneValidation(fl validator.FieldLevel) bool {
 	phone := fl.Field().String()
 	if phone == "" {
 		return true
 	}
-	cleaned := strings.Map(func(r rune) rune {
-		switch r {
-		case ' ', '-', '(', ')', '.':
-			return -1
-		}
-		return r
-	}, phone)
-	return phoneRegex.MatchString(cleaned)
+	return ValidatePhone(phone)
 }
 
 // IsStrongPassword requires at least 8 characters with upper, lower, digit and

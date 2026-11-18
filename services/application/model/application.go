@@ -158,24 +158,24 @@ type ReviewNote struct {
 type NewApplicationPayload struct {
 	Department     string   `json:"department" validate:"required,oneof=software iot"`
 	Specialization string   `json:"specialization" validate:"required,specialization"`
-	Motivation     string   `json:"motivation" validate:"required"`
-	Experience     string   `json:"experience" validate:"required"`
+	Motivation     string   `json:"motivation" validate:"required,max=2000"`
+	Experience     string   `json:"experience" validate:"required,max=2000"`
 	StartDate      string   `json:"start_date"`
 	EducationLevel string   `json:"education_level" validate:"required,oneof=university high_school"`
 	Session        string   `json:"session" validate:"required,oneof=morning afternoon"`
 	DurationMonths int      `json:"duration_months" validate:"required,min=1"`
 	WorkMode       string   `json:"work_mode" validate:"required,oneof=onsite remote hybrid"`
-	DocumentIDs    []string `json:"document_ids"`
+	DocumentIDs    []string `json:"document_ids" validate:"omitempty,dive,uuid"`
 }
 
 type StatusUpdatePayload struct {
 	Status      string `json:"status" validate:"required,oneof=submitted under_review shortlisted interview accepted rejected"`
-	Note        string `json:"note"`
+	Note        string `json:"note" validate:"omitempty,max=2000"`
 	InterviewAt string `json:"interview_at"`
 }
 
 type AddNoteRequest struct {
-	Text string `json:"text" validate:"required"`
+	Text string `json:"text" validate:"required,max=2000"`
 }
 
 type Booking struct {

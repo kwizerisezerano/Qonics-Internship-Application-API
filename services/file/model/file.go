@@ -1,10 +1,10 @@
 package model
 
 type PresignedURLRequest struct {
-	FileName    string `json:"file_name" validate:"required"`
-	FileType    string `json:"file_type" validate:"required"`
-	FileSize    int64  `json:"file_size" validate:"required"`
-	Description string `json:"description"`
+	FileName    string `json:"file_name" validate:"required,max=255"`
+	FileType    string `json:"file_type" validate:"required,max=100"`
+	FileSize    int64  `json:"file_size" validate:"required,gt=0"`
+	Description string `json:"description" validate:"omitempty,max=2000"`
 }
 
 type PresignedURLResponse struct {
@@ -20,10 +20,10 @@ type PresignedURLResponse struct {
 // storage key is resolved server-side from the pending record; the client
 // does not supply it.
 type ConfirmUploadRequest struct {
-	FileID        string                 `json:"file_id" validate:"required"`
-	SourceTable   string                 `json:"source_table"`
-	SourceTableID string                 `json:"source_table_id"`
-	Description   string                 `json:"description"`
+	FileID        string                 `json:"file_id" validate:"required,uuid"`
+	SourceTable   string                 `json:"source_table" validate:"omitempty,max=100"`
+	SourceTableID string                 `json:"source_table_id" validate:"omitempty,max=100"`
+	Description   string                 `json:"description" validate:"omitempty,max=2000"`
 	Extra         map[string]interface{} `json:"extra"`
 }
 
