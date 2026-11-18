@@ -200,6 +200,13 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
+	// Validate the submitted values (department, specialization and the other
+	// enumerated fields) before touching the database.
+	if err := model.Validate.Struct(&req); err != nil {
+		// Known error - invalid payload, no logging
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Validation failed")
+	}
+
 	// Get applicant profile ID
 	var profileID string
 	// Convert userID to int for database query

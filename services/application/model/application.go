@@ -1,6 +1,36 @@
 package model
 
-import "time"
+import (
+	"time"
+
+	"github.com/go-playground/validator/v10"
+)
+
+// Specializations is the canonical taxonomy: each department mapped to the
+// specialization values it accepts. Kept in sync with the frontend DEPARTMENTS
+// config and used to validate incoming payloads.
+var Specializations = map[string][]string{
+	"software": {"frontend", "backend", "fullstack", "mobile", "database"},
+	"iot":      {"embedded", "arduino-esp32", "sensors", "iot-apps", "smart-systems"},
+}
+
+// Validate is the validator used for incoming application payloads. In addition
+// to the struct tags it carries the custom `specialization` rule below.
+var Validate = validator.New()
+
+func init() {
+	// specialization passes only when the value belongs to the payload's
+	// department (e.g. department "iot" rejects "backend").
+	Validate.RegisterValidation("specialization", func(fl validator.FieldLevel) bool {
+		department := fl.Parent().FieldByName("Department").String()
+		for _, s := range Specializations[department] {
+			if s == fl.Field().String() {
+				return true
+			}
+		}
+		return false
+	})
+}
 
 type Application struct {
 	ID             string                `json:"id"`
@@ -125,8 +155,8 @@ type ReviewNote struct {
 }
 
 type NewApplicationPayload struct {
-	Department     string   `json:"department" validate:"required"`
-	Specialization string   `json:"specialization" validate:"required"`
+	Department     string   `json:"department" validate:"required,oneof=software iot"`
+	Specialization string   `json:"specialization" validate:"required,specialization"`
 	Motivation     string   `json:"motivation" validate:"required"`
 	Experience     string   `json:"experience" validate:"required"`
 	StartDate      string   `json:"start_date"`
