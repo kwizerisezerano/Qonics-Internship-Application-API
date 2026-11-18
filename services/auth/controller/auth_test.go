@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/http/httptest"
 	"os"
 	"testing"
@@ -22,6 +23,21 @@ import (
 var (
 	testDB *pgxpool.Pool
 )
+
+// testPassword satisfies the strong_password rule enforced on registration.
+const testPassword = "Str0ng@Pass"
+
+// uniqueFullName returns a letters-only name (the `name` rule rejects digits)
+// with a random suffix so the UNIQUE full_name_hash constraint is never hit
+// across repeated test runs.
+func uniqueFullName(prefix string) string {
+	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	b := make([]byte, 12)
+	for i := range b {
+		b[i] = alphabet[rand.Intn(len(alphabet))]
+	}
+	return prefix + " " + string(b)
+}
 
 func init() {
 	utils.IsTestMode = true
@@ -65,7 +81,7 @@ func TestRegister(t *testing.T) {
 	ctx := context.Background()
 	timestamp := fmt.Sprintf("%d", time.Now().UnixNano())
 	email := fmt.Sprintf("register%s@example.com", timestamp)
-	fullName := fmt.Sprintf("Test User %s", timestamp)
+	fullName := uniqueFullName("Test User")
 
 	app := fiber.New(fiber.Config{
 		AppName: "auth-service-test",
@@ -78,7 +94,7 @@ func TestRegister(t *testing.T) {
 		"full_name": fullName,
 		"email":     email,
 		"phone":     "+250788123456",
-		"password":  "password123",
+		"password":  testPassword,
 	}
 
 	payloadBytes, _ := json.Marshal(registerPayload)
@@ -108,7 +124,7 @@ func TestRegisterDuplicateEmail(t *testing.T) {
 	ctx := context.Background()
 	timestamp := fmt.Sprintf("%d", time.Now().UnixNano())
 	email := fmt.Sprintf("duplicate%s@example.com", timestamp)
-	fullName := fmt.Sprintf("Test User %s", timestamp)
+	fullName := uniqueFullName("Test User")
 
 	app := fiber.New(fiber.Config{
 		AppName: "auth-service-test",
@@ -121,7 +137,7 @@ func TestRegisterDuplicateEmail(t *testing.T) {
 		"full_name": fullName,
 		"email":     email,
 		"phone":     "+250788123456",
-		"password":  "password123",
+		"password":  testPassword,
 	}
 
 	// First registration
@@ -161,7 +177,7 @@ func TestRegisterInvalidEmail(t *testing.T) {
 		"full_name": "Test User",
 		"email":     "invalid-email",
 		"phone":     "+250788123456",
-		"password":  "password123",
+		"password":  testPassword,
 	}
 
 	payloadBytes, _ := json.Marshal(registerPayload)
@@ -210,7 +226,7 @@ func TestLogin(t *testing.T) {
 	ctx := context.Background()
 	timestamp := fmt.Sprintf("%d", time.Now().UnixNano())
 	email := fmt.Sprintf("login%s@example.com", timestamp)
-	fullName := fmt.Sprintf("Login Test User %s", timestamp)
+	fullName := uniqueFullName("Login Test User")
 
 	app := fiber.New(fiber.Config{
 		AppName: "auth-service-test",
@@ -225,7 +241,7 @@ func TestLogin(t *testing.T) {
 		"full_name": fullName,
 		"email":     email,
 		"phone":     "+250788654321",
-		"password":  "password123",
+		"password":  testPassword,
 	}
 
 	payloadBytes, _ := json.Marshal(registerPayload)
@@ -238,7 +254,7 @@ func TestLogin(t *testing.T) {
 	// Now login
 	loginPayload := map[string]interface{}{
 		"email":    email,
-		"password": "password123",
+		"password": testPassword,
 	}
 
 	payloadBytes, _ = json.Marshal(loginPayload)
@@ -294,7 +310,7 @@ func TestLoginWrongPassword(t *testing.T) {
 	ctx := context.Background()
 	timestamp := fmt.Sprintf("%d", time.Now().UnixNano())
 	email := fmt.Sprintf("wrongpass%s@example.com", timestamp)
-	fullName := fmt.Sprintf("Test User %s", timestamp)
+	fullName := uniqueFullName("Test User")
 
 	app := fiber.New(fiber.Config{
 		AppName: "auth-service-test",
@@ -309,7 +325,7 @@ func TestLoginWrongPassword(t *testing.T) {
 		"full_name": fullName,
 		"email":     email,
 		"phone":     "+250788123456",
-		"password":  "password123",
+		"password":  testPassword,
 	}
 
 	payloadBytes, _ := json.Marshal(registerPayload)
@@ -345,7 +361,7 @@ func TestChangePasswordSamePassword(t *testing.T) {
 	ctx := context.Background()
 	timestamp := fmt.Sprintf("%d", time.Now().UnixNano())
 	email := fmt.Sprintf("samepass%s@example.com", timestamp)
-	fullName := fmt.Sprintf("Test User %s", timestamp)
+	fullName := uniqueFullName("Test User")
 
 	app := fiber.New(fiber.Config{
 		AppName: "auth-service-test",
@@ -373,7 +389,7 @@ func TestChangePasswordSamePassword(t *testing.T) {
 		"full_name": fullName,
 		"email":     email,
 		"phone":     "+250788123456",
-		"password":  "password123",
+		"password":  testPassword,
 	}
 
 	payloadBytes, _ := json.Marshal(registerPayload)
@@ -386,7 +402,7 @@ func TestChangePasswordSamePassword(t *testing.T) {
 	// Login to get token
 	loginPayload := map[string]interface{}{
 		"email":    email,
-		"password": "password123",
+		"password": testPassword,
 	}
 
 	payloadBytes, _ = json.Marshal(loginPayload)
@@ -402,8 +418,8 @@ func TestChangePasswordSamePassword(t *testing.T) {
 
 	// Try to change password to the same password
 	changePasswordPayload := map[string]interface{}{
-		"currentPassword": "password123",
-		"newPassword":     "password123",
+		"currentPassword": testPassword,
+		"newPassword":     testPassword,
 	}
 
 	payloadBytes, _ = json.Marshal(changePasswordPayload)

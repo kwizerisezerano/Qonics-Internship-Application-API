@@ -39,7 +39,7 @@ stop:
 auth:
 	@echo "Building auth service binary..."
 	cd ./services/auth && go mod tidy
-	cd ./services/auth/controller && go test -v
+	cd ./services/auth && go test -v ./...
 	cd ./services/auth && env GOOS=linux CGO_ENABLED=0 go build -o ${APP_BINARY} -buildvcs=false
 	@echo "Done!"
 
@@ -47,7 +47,7 @@ auth:
 applicant:
 	@echo "Building applicant service binary..."
 	cd ./services/applicant && go mod tidy
-	cd ./services/applicant/controller && go test -v
+	cd ./services/applicant && go test -v ./...
 	cd ./services/applicant && env GOOS=linux CGO_ENABLED=0 go build -o ${APP_BINARY} -buildvcs=false
 	@echo "Done!"
 
@@ -55,7 +55,7 @@ applicant:
 application:
 	@echo "Building application service binary..."
 	cd ./services/application && go mod tidy
-	cd ./services/application/controller && go test -v
+	cd ./services/application && go test -v ./...
 	cd ./services/application && env GOOS=linux CGO_ENABLED=0 go build -o ${APP_BINARY} -buildvcs=false
 	@echo "Done!"
 
@@ -71,7 +71,7 @@ notification:
 file:
 	@echo "Building file service binary..."
 	cd ./services/file && go mod tidy
-	cd ./services/file/controller && go test -v
+	cd ./services/file && go test -v ./...
 	cd ./services/file && env GOOS=linux CGO_ENABLED=0 go build -o ${APP_BINARY} -buildvcs=false
 	@echo "Done!"
 
@@ -79,7 +79,7 @@ file:
 shared-package:
 	@echo "Testing shared-package..."
 	cd ./libs/shared-package && go mod tidy
-	cd ./libs/shared-package/logger && go test -v
+	cd ./libs/shared-package && go test -v ./...
 	@echo "Done!"
 
 ## recreate_postgres_test: Delete and recreate Docker container for PostgreSQL test
@@ -111,8 +111,9 @@ test_db: recreate_postgres_test
 ## test: Run all service tests against test database
 test: test_db
 	@echo "Running all service tests..."
-	cd ./services/auth/controller && go test -v
-	cd ./services/applicant/controller && go test -v
-	cd ./services/application/controller && go test -v
-	cd ./services/notification && go test -v
+	cd ./libs/shared-package && go test -v ./...
+	cd ./services/auth && go test -v ./...
+	cd ./services/applicant && go test -v ./...
+	cd ./services/application && go test -v ./...
+	cd ./services/notification && go test -v ./...
 	@echo "All tests completed!"
