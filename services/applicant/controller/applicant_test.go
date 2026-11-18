@@ -349,6 +349,69 @@ func TestSaveProfileRoute(t *testing.T) {
 			},
 		},
 		{
+			name:       "validation - name contains digits",
+			headers:    authHeaders(seeded.UserID, "applicant"),
+			payload:    withField("full_name", "John Doe 123"),
+			wantStatus: fiber.StatusBadRequest,
+			check: func(t *testing.T, body map[string]any) {
+				assert.True(t, hasValidationError(body, "full_name"), "expected full_name error: %v", body)
+			},
+		},
+		{
+			name:       "validation - full_name too long",
+			headers:    authHeaders(seeded.UserID, "applicant"),
+			payload:    withField("full_name", strings.Repeat("a", 151)),
+			wantStatus: fiber.StatusBadRequest,
+			check: func(t *testing.T, body map[string]any) {
+				assert.True(t, hasValidationError(body, "full_name"), "expected full_name error: %v", body)
+			},
+		},
+		{
+			name:       "validation - country contains digits",
+			headers:    authHeaders(seeded.UserID, "applicant"),
+			payload:    withField("country", "Rwanda1"),
+			wantStatus: fiber.StatusBadRequest,
+			check: func(t *testing.T, body map[string]any) {
+				assert.True(t, hasValidationError(body, "country"), "expected country error: %v", body)
+			},
+		},
+		{
+			name:       "validation - institution contains unsupported characters",
+			headers:    authHeaders(seeded.UserID, "applicant"),
+			payload:    withField("institution", "Uni<script>"),
+			wantStatus: fiber.StatusBadRequest,
+			check: func(t *testing.T, body map[string]any) {
+				assert.True(t, hasValidationError(body, "institution"), "expected institution error: %v", body)
+			},
+		},
+		{
+			name:       "validation - invalid github url",
+			headers:    authHeaders(seeded.UserID, "applicant"),
+			payload:    withField("github_url", "not-a-url"),
+			wantStatus: fiber.StatusBadRequest,
+			check: func(t *testing.T, body map[string]any) {
+				assert.True(t, hasValidationError(body, "github_url"), "expected github_url error: %v", body)
+			},
+		},
+		{
+			name:       "validation - invalid linkedin url",
+			headers:    authHeaders(seeded.UserID, "applicant"),
+			payload:    withField("linkedin_url", "not-a-url"),
+			wantStatus: fiber.StatusBadRequest,
+			check: func(t *testing.T, body map[string]any) {
+				assert.True(t, hasValidationError(body, "linkedin_url"), "expected linkedin_url error: %v", body)
+			},
+		},
+		{
+			name:       "validation - bio too long",
+			headers:    authHeaders(seeded.UserID, "applicant"),
+			payload:    withField("bio", strings.Repeat("a", 2001)),
+			wantStatus: fiber.StatusBadRequest,
+			check: func(t *testing.T, body map[string]any) {
+				assert.True(t, hasValidationError(body, "bio"), "expected bio error: %v", body)
+			},
+		},
+		{
 			name:       "not found - no profile for caller",
 			headers:    authHeaders(888888888, "applicant"),
 			payload:    base,

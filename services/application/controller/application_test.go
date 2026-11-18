@@ -285,6 +285,33 @@ func TestCreateApplicationRoute(t *testing.T) {
 			},
 		},
 		{
+			name:       "validation - missing motivation",
+			headers:    auth,
+			payload:    map[string]any{"department": "software", "specialization": "backend", "experience": "2 years", "education_level": "university", "session": "morning", "duration_months": 6, "work_mode": "remote"},
+			wantStatus: fiber.StatusBadRequest,
+			check: func(t *testing.T, body map[string]any) {
+				assert.True(t, hasValidationError(body, "motivation"), "expected motivation error: %v", body)
+			},
+		},
+		{
+			name:       "validation - missing experience",
+			headers:    auth,
+			payload:    map[string]any{"department": "software", "specialization": "backend", "motivation": "I want to learn", "education_level": "university", "session": "morning", "duration_months": 6, "work_mode": "remote"},
+			wantStatus: fiber.StatusBadRequest,
+			check: func(t *testing.T, body map[string]any) {
+				assert.True(t, hasValidationError(body, "experience"), "expected experience error: %v", body)
+			},
+		},
+		{
+			name:       "validation - missing specialization",
+			headers:    auth,
+			payload:    map[string]any{"department": "software", "motivation": "I want to learn", "experience": "2 years", "education_level": "university", "session": "morning", "duration_months": 6, "work_mode": "remote"},
+			wantStatus: fiber.StatusBadRequest,
+			check: func(t *testing.T, body map[string]any) {
+				assert.True(t, hasValidationError(body, "specialization"), "expected specialization error: %v", body)
+			},
+		},
+		{
 			name:       "validation - invalid department",
 			headers:    auth,
 			payload:    withField("department", "Engineering"),
@@ -527,6 +554,21 @@ func TestUpdateStatusRoute(t *testing.T) {
 			},
 		},
 		{
+			name:       "validation - missing status",
+			headers:    admin,
+			payload:    map[string]any{"note": "no status here"},
+			wantStatus: fiber.StatusBadRequest,
+			check: func(t *testing.T, body map[string]any) {
+				assert.True(t, hasValidationError(body, "status"), "expected status error: %v", body)
+			},
+		},
+		{
+			name:       "bad request - invalid interview date",
+			headers:    admin,
+			payload:    map[string]any{"status": "interview", "interview_at": "not-a-date"},
+			wantStatus: fiber.StatusBadRequest,
+		},
+		{
 			name:       "not found - unknown application",
 			headers:    admin,
 			payload:    map[string]any{"status": "under_review"},
@@ -542,6 +584,12 @@ func TestUpdateStatusRoute(t *testing.T) {
 			name:       "success - updates status",
 			headers:    admin,
 			payload:    map[string]any{"status": "under_review", "note": "Looks promising"},
+			wantStatus: fiber.StatusOK,
+		},
+		{
+			name:       "success - records interview date",
+			headers:    admin,
+			payload:    map[string]any{"status": "interview", "interview_at": "2026-05-01T09:00:00Z"},
 			wantStatus: fiber.StatusOK,
 		},
 	}

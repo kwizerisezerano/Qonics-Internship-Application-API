@@ -9,13 +9,14 @@ import (
 	"math/rand"
 	"net/http/httptest"
 	"os"
-	"strconv"
 	"testing"
 	"time"
 
+	"github.com/dgrijalva/jwt-go"
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/qonics/qonics-appy-api/libs/shared-package/config"
+	"github.com/qonics/qonics-appy-api/libs/shared-package/middleware"
 	"github.com/qonics/qonics-appy-api/libs/shared-package/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,7 +34,12 @@ var (
 // testPassword satisfies the strong_password rule enforced on registration.
 const testPassword = "Str0ng@Pass"
 
-// testEmail used by the identity injected through the test middleware.
+// testJWTSecret is used to sign the tokens consumed by the real auth
+// middleware, so authenticated and unauthenticated requests flow through the
+// same production code path.
+const testJWTSecret = "auth-test-secret"
+
+// testIdentityEmail is attached to the identity carried by the test tokens.
 const testIdentityEmail = "tester@example.com"
 
 func init() {
@@ -61,30 +67,33 @@ func init() {
 	controller := NewAuthController(db, cfg, cfg.InitRedis())
 
 	authTestApp = fiber.New(fiber.Config{AppName: "auth-service-test"})
-	authTestApp.Use(testAuthMiddleware)
-	authTestApp.Post("/api/v1/auth/register", controller.Register)
-	authTestApp.Post("/api/v1/auth/login", controller.Login)
-	authTestApp.Post("/api/v1/auth/forgot-password", controller.ForgotPassword)
-	authTestApp.Post("/api/v1/auth/reset-password", controller.ResetPassword)
-	authTestApp.Post("/api/v1/auth/change-password", controller.ChangePassword)
+
+	// Mirror routes/api.go: the public routes stay open while the authenticated
+	// group (change-password) runs through the real middleware.
+	api := authTestApp.Group("/api/v1/auth")
+	api.Post("/register", controller.Register)
+	api.Post("/login", controller.Login)
+	api.Post("/logout", controller.Logout)
+	api.Post("/forgot-password", controller.ForgotPassword)
+	api.Post("/reset-password", controller.ResetPassword)
+
+	api.Use(middleware.AuthMiddleware(testJWTSecret))
+	api.Post("/change-password", controller.ChangePassword)
 }
 
-// testAuthMiddleware injects a caller identity when the request carries the
-// X-Test-User-ID header, letting each route table cover both authenticated and
-// unauthenticated ("no header" -> 401) scenarios from the same handler.
-func testAuthMiddleware(c *fiber.Ctx) error {
-	if raw := c.Get("X-Test-User-ID"); raw != "" {
-		if id, err := strconv.Atoi(raw); err == nil {
-			c.Locals("user_id", float64(id))
-			c.Locals("email", testIdentityEmail)
-			role := c.Get("X-Test-Role")
-			if role == "" {
-				role = "applicant"
-			}
-			c.Locals("role", role)
-		}
+// authHeaders builds an Authorization header carrying a signed token for the
+// given user id and role (the test equivalent of leazi's createTestAccessToken).
+func authHeaders(userID int, role string) map[string]string {
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"user_id": float64(userID),
+		"email":   testIdentityEmail,
+		"role":    role,
+	})
+	signed, err := token.SignedString([]byte(testJWTSecret))
+	if err != nil {
+		panic("Failed to sign test token: " + err.Error())
 	}
-	return c.Next()
+	return map[string]string{"Authorization": "Bearer " + signed}
 }
 
 // doJSON issues a request against the shared test app and returns the status
@@ -264,6 +273,42 @@ func TestRegisterRoute(t *testing.T) {
 			},
 		},
 		{
+			name: "validation - missing full_name",
+			payload: map[string]any{
+				"email":    uniqueEmail("nofullname"),
+				"phone":    "+250788123456",
+				"password": testPassword,
+			},
+			wantStatus: 400,
+			check: func(t *testing.T, body map[string]any) {
+				assert.True(t, hasValidationError(body, "full_name"))
+			},
+		},
+		{
+			name: "validation - missing phone",
+			payload: map[string]any{
+				"full_name": uniqueName("No Phone"),
+				"email":     uniqueEmail("nophone"),
+				"password":  testPassword,
+			},
+			wantStatus: 400,
+			check: func(t *testing.T, body map[string]any) {
+				assert.True(t, hasValidationError(body, "phone"))
+			},
+		},
+		{
+			name: "validation - missing password",
+			payload: map[string]any{
+				"full_name": uniqueName("No Password"),
+				"email":     uniqueEmail("nopassword"),
+				"phone":     "+250788123456",
+			},
+			wantStatus: 400,
+			check: func(t *testing.T, body map[string]any) {
+				assert.True(t, hasValidationError(body, "password"))
+			},
+		},
+		{
 			name:       "validation - empty payload",
 			payload:    map[string]any{},
 			wantStatus: 400,
@@ -325,6 +370,14 @@ func TestLoginRoute(t *testing.T) {
 			},
 		},
 		{
+			name:       "validation - missing password",
+			payload:    map[string]any{"email": email},
+			wantStatus: 400,
+			check: func(t *testing.T, body map[string]any) {
+				assert.True(t, hasValidationError(body, "password"))
+			},
+		},
+		{
 			name:       "validation - empty payload",
 			payload:    map[string]any{},
 			wantStatus: 400,
@@ -339,6 +392,28 @@ func TestLoginRoute(t *testing.T) {
 			if tt.check != nil {
 				tt.check(t, body)
 			}
+		})
+	}
+}
+
+// TestLogoutRoute covers POST /api/v1/auth/logout. The route is public so it
+// always succeeds and simply clears the auth cookies.
+func TestLogoutRoute(t *testing.T) {
+	tests := []struct {
+		name       string
+		headers    map[string]string
+		wantStatus int
+	}{
+		{name: "success - no token", headers: nil, wantStatus: 200},
+		{name: "success - with token", headers: authHeaders(1, "applicant"), wantStatus: 200},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, body := doJSON(t, "POST", "/api/v1/auth/logout", nil, tt.headers)
+			require.Equal(t, tt.wantStatus, status, "body: %v", body)
+			assert.Equal(t, float64(tt.wantStatus), body["status"])
+			assert.Equal(t, "Logout successful", body["message"])
 		})
 	}
 }
@@ -405,6 +480,19 @@ func TestResetPasswordRoute(t *testing.T) {
 				assert.True(t, hasValidationError(body, "token"))
 			},
 		},
+		{
+			name:       "validation - missing password",
+			payload:    map[string]any{"token": "reset-token"},
+			wantStatus: 400,
+			check: func(t *testing.T, body map[string]any) {
+				assert.True(t, hasValidationError(body, "password"))
+			},
+		},
+		{
+			name:       "validation - empty payload",
+			payload:    map[string]any{},
+			wantStatus: 400,
+		},
 	}
 
 	for _, tt := range tests {
@@ -420,30 +508,49 @@ func TestResetPasswordRoute(t *testing.T) {
 }
 
 // TestChangePasswordRoute covers POST /api/v1/auth/change-password. Every
-// scenario registers its own user so the sub-tests stay order independent even
-// though a successful change mutates the stored password.
+// scenario that operates on a real user registers its own so the sub-tests stay
+// order independent even though a successful change mutates the stored password.
 func TestChangePasswordRoute(t *testing.T) {
 	tests := []struct {
-		name          string
-		authenticated bool
-		current       string
-		next          string
-		wantStatus    int
+		name       string
+		userID     int // 0 = no token, -1 = register a fresh user, >0 = literal id
+		current    string
+		next       string
+		wantStatus int
+		check      func(t *testing.T, body map[string]any)
 	}{
-		{name: "success - strong new password", authenticated: true, current: testPassword, next: "N3w@Passw0rd", wantStatus: 200},
-		{name: "not acceptable - same as current", authenticated: true, current: testPassword, next: testPassword, wantStatus: 406},
-		{name: "bad request - wrong current password", authenticated: true, current: "Wr0ng@Pass", next: "N3w@Passw0rd", wantStatus: 400},
-		{name: "validation - weak new password", authenticated: true, current: testPassword, next: "weak", wantStatus: 400},
-		{name: "unauthorized - no identity", authenticated: false, current: testPassword, next: "N3w@Passw0rd", wantStatus: 401},
+		{name: "unauthorized - no token", userID: 0, current: testPassword, next: "N3w@Passw0rd", wantStatus: 401},
+		{name: "not found - unknown user", userID: 999999999, current: testPassword, next: "N3w@Passw0rd", wantStatus: 404},
+		{
+			name: "validation - missing new password", userID: -1, current: testPassword, next: "",
+			wantStatus: 400,
+			check: func(t *testing.T, body map[string]any) {
+				assert.True(t, hasValidationError(body, "new_password"), "expected new_password error: %v", body)
+			},
+		},
+		{
+			name: "validation - weak new password", userID: -1, current: testPassword, next: "weak",
+			wantStatus: 400,
+			check: func(t *testing.T, body map[string]any) {
+				assert.True(t, hasValidationError(body, "new_password"), "expected new_password error: %v", body)
+			},
+		},
+		{name: "bad request - wrong current password", userID: -1, current: "Wr0ng@Pass", next: "N3w@Passw0rd", wantStatus: 400},
+		{name: "not acceptable - same as current", userID: -1, current: testPassword, next: testPassword, wantStatus: 406},
+		{name: "success - strong new password", userID: -1, current: testPassword, next: "N3w@Passw0rd", wantStatus: 200},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			headers := map[string]string{}
-			if tt.authenticated {
-				email, userID := registerUser(t, "changepass")
-				headers["X-Test-User-ID"] = strconv.Itoa(userID)
-				headers["X-Test-Email"] = email
+			var headers map[string]string
+			switch {
+			case tt.userID == 0:
+				headers = nil
+			case tt.userID < 0:
+				_, userID := registerUser(t, "changepass")
+				headers = authHeaders(userID, "applicant")
+			default:
+				headers = authHeaders(tt.userID, "applicant")
 			}
 
 			status, body := doJSON(t, "POST", "/api/v1/auth/change-password", map[string]any{
@@ -453,6 +560,29 @@ func TestChangePasswordRoute(t *testing.T) {
 
 			require.Equal(t, tt.wantStatus, status, "body: %v", body)
 			assert.Equal(t, float64(tt.wantStatus), body["status"])
+			if tt.check != nil {
+				tt.check(t, body)
+			}
+		})
+	}
+}
+
+// TestUnauthorizedAccess sweeps the authenticated route surface and asserts
+// every endpoint rejects requests without a token, mirroring leazi's single
+// unauthorized table.
+func TestUnauthorizedAccess(t *testing.T) {
+	endpoints := []struct {
+		method string
+		path   string
+	}{
+		{"POST", "/api/v1/auth/change-password"},
+	}
+
+	for _, ep := range endpoints {
+		t.Run(ep.method+" "+ep.path, func(t *testing.T) {
+			status, body := doJSON(t, ep.method, ep.path, map[string]any{}, nil)
+			require.Equal(t, 401, status, "body: %v", body)
+			assert.Equal(t, float64(401), body["status"])
 		})
 	}
 }
