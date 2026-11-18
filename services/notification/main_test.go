@@ -37,7 +37,7 @@ func TestGenerateHtmlTemplate(t *testing.T) {
 				"specialization": "backend",
 				"Year":           2026,
 			},
-			wantContain: []string{"Alice", "APP-123", "software", "backend", "QONICS"},
+			wantContain: []string{"Alice", "APP-123", "software", "backend"},
 		},
 		{
 			name:     "status updated",
@@ -83,8 +83,8 @@ func TestGenerateHtmlTemplate(t *testing.T) {
 			for _, want := range tt.wantContain {
 				assert.Contains(t, rendered, want)
 			}
-			assert.Contains(t, rendered, "QONICS")       // shared header partial rendered
-			assert.Contains(t, rendered, "Do not reply") // shared footer partial rendered
+			assert.Contains(t, rendered, "res.cloudinary.com") // shared header partial rendered (logo)
+			assert.Contains(t, rendered, "Do not reply")       // shared footer partial rendered
 		})
 	}
 }

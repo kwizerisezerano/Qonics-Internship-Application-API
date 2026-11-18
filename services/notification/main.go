@@ -19,6 +19,10 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// defaultLogoURL is the Qonics app logo used in the shared email header. It is
+// injected into every templated email unless a caller overrides LogoUrl.
+const defaultLogoURL = "https://res.cloudinary.com/danzeqybu/image/upload/v1795014256/WhatsApp_Image_2026-11-18_at_5.02.48_PM_rudk0a.jpg"
+
 type NotificationEvent struct {
 	Channel       string                 `json:"channel"` // EMAIL or IN_APP
 	RecipientID   string                 `json:"recipient_id"`
@@ -197,6 +201,9 @@ func sendEmail(event *NotificationEvent, cfg *config.Config) error {
 		}
 		if _, ok := event.Data["Year"]; !ok {
 			event.Data["Year"] = time.Now().Year()
+		}
+		if _, ok := event.Data["LogoUrl"]; !ok {
+			event.Data["LogoUrl"] = defaultLogoURL
 		}
 
 		rendered, err := utils.GenerateHtmlTemplate(event.Template, event.Data)
