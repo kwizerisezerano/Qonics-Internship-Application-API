@@ -52,7 +52,7 @@ func TestAuthEndpoints(t *testing.T) {
 			FullName: "Test User",
 			Email:    "test@example.com",
 			Phone:    "+1234567890",
-			Password: "password123",
+			Password: "Str0ng@Pass",
 		}
 		body, _ := json.Marshal(reqBody)
 		resp, err := http.Post(baseURL+"/api/v1/auth/register", "application/json", bytes.NewBuffer(body))
@@ -75,7 +75,7 @@ func TestAuthEndpoints(t *testing.T) {
 	t.Run("Login", func(t *testing.T) {
 		reqBody := LoginRequest{
 			Email:    "test@example.com",
-			Password: "password123",
+			Password: "Str0ng@Pass",
 		}
 		body, _ := json.Marshal(reqBody)
 		resp, err := http.Post(baseURL+"/api/v1/auth/login", "application/json", bytes.NewBuffer(body))
@@ -117,7 +117,7 @@ func TestAuthEndpoints(t *testing.T) {
 		// First login to get token
 		reqBody := LoginRequest{
 			Email:    "test@example.com",
-			Password: "password123",
+			Password: "Str0ng@Pass",
 		}
 		body, _ := json.Marshal(reqBody)
 		resp, err := http.Post(baseURL+"/api/v1/auth/login", "application/json", bytes.NewBuffer(body))
