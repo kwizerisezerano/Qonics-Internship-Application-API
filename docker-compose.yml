@@ -4,10 +4,10 @@ services:
     container_name: qonics-postgres
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
       POSTGRES_DB: qonics_db
       POSTGRES_INITDB_ARGS: "-E UTF8"
-      ENCRYPTION_KEY: secret
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
     ports:
       - "5432:5432"
     volumes:
@@ -38,7 +38,7 @@ services:
     image: postgres:17-alpine
     container_name: qonics-migrate
     environment:
-      PGPASSWORD: postgres
+      PGPASSWORD: ${DATABASE_PASSWORD}
     volumes:
       - ./libs/shared-package/migration:/migrations:ro
     entrypoint: ["/bin/sh", "-c"]
@@ -76,13 +76,13 @@ services:
       - DATABASE_HOST=postgres
       - DATABASE_PORT=5432
       - DATABASE_USER=postgres
-      - DATABASE_PASSWORD=postgres
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
       - DATABASE_DBNAME=qonics_db
       - DATABASE_SSLMODE=disable
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - JWT_SECRET=secret
-      - ENCRYPTION_KEY=secret
+      - JWT_SECRET=${JWT_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - PORT=9000
     depends_on:
       postgres:
@@ -106,13 +106,13 @@ services:
       - DATABASE_HOST=postgres
       - DATABASE_PORT=5432
       - DATABASE_USER=postgres
-      - DATABASE_PASSWORD=postgres
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
       - DATABASE_DBNAME=qonics_db
       - DATABASE_SSLMODE=disable
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - JWT_SECRET=secret
-      - ENCRYPTION_KEY=secret
+      - JWT_SECRET=${JWT_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - PORT=9000
     depends_on:
       postgres:
@@ -138,13 +138,13 @@ services:
       - DATABASE_HOST=postgres
       - DATABASE_PORT=5432
       - DATABASE_USER=postgres
-      - DATABASE_PASSWORD=postgres
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
       - DATABASE_DBNAME=qonics_db
       - DATABASE_SSLMODE=disable
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - JWT_SECRET=secret
-      - ENCRYPTION_KEY=secret
+      - JWT_SECRET=${JWT_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - PORT=9000
     depends_on:
       postgres:
@@ -166,19 +166,19 @@ services:
       - DATABASE_HOST=postgres
       - DATABASE_PORT=5432
       - DATABASE_USER=postgres
-      - DATABASE_PASSWORD=postgres
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
       - DATABASE_DBNAME=qonics_db
       - DATABASE_SSLMODE=disable
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=
       - REDIS_DB=0
-      - JWT_SECRET=secret
-      - ENCRYPTION_KEY=secret
+      - JWT_SECRET=${JWT_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - SMTP_HOST=smtp.gmail.com
       - SMTP_PORT=587
       - SMTP_USER=kwizerisezerano250@gmail.com
-      - SMTP_PASSWORD=esro lhjn rudk gfmh
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
       - SMTP_FROM=kwizerisezerano250@gmail.com
     depends_on:
       postgres:
@@ -202,11 +202,11 @@ services:
       - DATABASE_HOST=postgres
       - DATABASE_PORT=5432
       - DATABASE_USER=postgres
-      - DATABASE_PASSWORD=postgres
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
       - DATABASE_DBNAME=qonics_db
       - DATABASE_SSLMODE=disable
-      - JWT_SECRET=secret
-      - ENCRYPTION_KEY=secret
+      - JWT_SECRET=${JWT_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - PORT=9000
       - CLOUDFLARE_ACCOUNT_ID=${CLOUDFLARE_ACCOUNT_ID}
       - CLOUDFLARE_ACCESS_KEY_ID=${CLOUDFLARE_ACCESS_KEY_ID}
