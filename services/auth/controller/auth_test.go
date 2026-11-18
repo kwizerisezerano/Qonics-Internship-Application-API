@@ -313,7 +313,9 @@ func TestRegisterRoute(t *testing.T) {
 			payload:    map[string]any{},
 			wantStatus: 400,
 			check: func(t *testing.T, body map[string]any) {
-				assert.Equal(t, "Validation failed", body["message"])
+				msg, _ := body["message"].(string)
+				assert.Contains(t, msg, "full_name is required")
+				assert.Contains(t, msg, "password is required")
 				assert.True(t, hasValidationError(body, ""))
 			},
 		},

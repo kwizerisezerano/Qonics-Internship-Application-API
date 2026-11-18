@@ -448,7 +448,7 @@ func TestListNotificationsRoute(t *testing.T) {
 	_, err := applicantTestDB.Exec(context.Background(), `
 		INSERT INTO notifications (id, user_id, title, message)
 		VALUES ($1, $2, 'Welcome', 'Your account is ready')
-	`, uuid.New().String(), seeded.UserID)
+	`, fmt.Sprintf("notif-%d", time.Now().UnixNano()), seeded.UserID)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -497,7 +497,7 @@ func TestListNotificationsRoute(t *testing.T) {
 // TestMarkNotificationsReadRoute covers POST /api/v1/applicant/notifications/read.
 func TestMarkNotificationsReadRoute(t *testing.T) {
 	seeded := seedApplicant(t)
-	notificationID := uuid.New().String()
+	notificationID := fmt.Sprintf("notif-%d", time.Now().UnixNano())
 	_, err := applicantTestDB.Exec(context.Background(), `
 		INSERT INTO notifications (id, user_id, title, message, read)
 		VALUES ($1, $2, 'Reminder', 'Submit your documents', FALSE)
@@ -531,7 +531,7 @@ func TestMarkNotificationsReadRoute(t *testing.T) {
 		{
 			name:       "bad request - notification not owned by caller",
 			headers:    auth,
-			payload:    map[string]any{"ids": []any{uuid.New().String()}},
+			payload:    map[string]any{"ids": []any{fmt.Sprintf("notif-%d", time.Now().UnixNano()+1)}},
 			wantStatus: fiber.StatusBadRequest,
 		},
 		{

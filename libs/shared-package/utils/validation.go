@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"reflect"
 	"regexp"
 	"strings"
 	"unicode"
@@ -28,6 +29,17 @@ var (
 // `strong_password`.
 func NewValidator() *validator.Validate {
 	v := validator.New()
+	// Use the JSON field name for error keys so they line up with the request
+	// payload (leazi-style). Without this, Go field names such as "IDs" would
+	// snake-case to "i_ds" instead of "ids", and slice keys would not match the
+	// submitted form fields.
+	v.RegisterTagNameFunc(func(fld reflect.StructField) string {
+		name := strings.SplitN(fld.Tag.Get("json"), ",", 2)[0]
+		if name == "" || name == "-" {
+			return fld.Name
+		}
+		return name
+	})
 	_ = v.RegisterValidation("name", NameValidation)
 	_ = v.RegisterValidation("text", TextValidation)
 	_ = v.RegisterValidation("regex", RegexValidation)
@@ -124,13 +136,30 @@ func FormatValidationErrors(err error) []FieldError {
 
 // JsonValidationErrorResponse returns a 400 carrying the field-level validation
 // errors. It is the standard response for request-body validation failures on
-// POST/PUT/PATCH handlers.
+// POST/PUT/PATCH handlers. The top-level `message` is a human-readable summary
+// of the failures (it is what the frontend displays), while `errors` carries the
+// field-level detail for programmatic use.
 func JsonValidationErrorResponse(c *fiber.Ctx, err error) error {
+	fieldErrors := FormatValidationErrors(err)
 	return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 		"status":  fiber.StatusBadRequest,
-		"message": "Validation failed",
-		"errors":  FormatValidationErrors(err),
+		"message": validationSummary(fieldErrors),
+		"errors":  fieldErrors,
 	})
+}
+
+// validationSummary joins the field-level errors into a single readable
+// sentence, e.g. "full_name contains unsupported characters" or
+// "motivation is required; document_ids[0] must be a valid UUID".
+func validationSummary(fieldErrors []FieldError) string {
+	if len(fieldErrors) == 0 {
+		return "Validation failed"
+	}
+	parts := make([]string, 0, len(fieldErrors))
+	for _, e := range fieldErrors {
+		parts = append(parts, e.Key+" "+e.Message)
+	}
+	return strings.Join(parts, "; ")
 }
 
 // validationMessage maps a validator tag to a human-readable message.

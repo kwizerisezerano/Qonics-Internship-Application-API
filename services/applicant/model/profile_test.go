@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -128,14 +127,18 @@ func TestAppSettingsValidation(t *testing.T) {
 // TestMarkNotificationsReadValidation covers the required ids list.
 func TestMarkNotificationsReadValidation(t *testing.T) {
 	t.Run("valid", func(t *testing.T) {
-		assert.NoError(t, Validate.Struct(&MarkNotificationsReadRequest{IDs: []string{uuid.NewString(), uuid.NewString()}}))
+		assert.NoError(t, Validate.Struct(&MarkNotificationsReadRequest{IDs: []string{"notif-1795011984924978434"}}))
 	})
 
 	t.Run("rejects nil ids", func(t *testing.T) {
 		assert.Error(t, Validate.Struct(&MarkNotificationsReadRequest{}))
 	})
 
-	t.Run("rejects non-uuid ids", func(t *testing.T) {
-		assert.Error(t, Validate.Struct(&MarkNotificationsReadRequest{IDs: []string{"1", "2"}}))
+	t.Run("rejects empty id", func(t *testing.T) {
+		assert.Error(t, Validate.Struct(&MarkNotificationsReadRequest{IDs: []string{""}}))
+	})
+
+	t.Run("rejects over-long id", func(t *testing.T) {
+		assert.Error(t, Validate.Struct(&MarkNotificationsReadRequest{IDs: []string{strings.Repeat("a", 51)}}))
 	})
 }

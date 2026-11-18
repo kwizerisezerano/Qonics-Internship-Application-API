@@ -46,8 +46,12 @@ type AppSettings struct {
 	ClosureMessage   string `json:"closure_message" validate:"omitempty,max=500"`
 }
 
+// MarkNotificationsReadRequest carries the notification ids to mark as read.
+// Notification ids are generated as "notif-<unixnano>" (not UUIDs) and stored in
+// a VARCHAR(50) column, so each id only needs to be non-empty and within the
+// column length.
 type MarkNotificationsReadRequest struct {
-	IDs []string `json:"ids" validate:"required,min=1,dive,uuid"`
+	IDs []string `json:"ids" validate:"required,min=1,dive,required,max=50"`
 }
 
 // ApplicantFilter is the query contract for GET /applicants (admin). The tagged

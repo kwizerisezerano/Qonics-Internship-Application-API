@@ -41,6 +41,48 @@ func TestFormatValidationErrorsNonValidatorError(t *testing.T) {
 	assert.Empty(t, FormatValidationErrors(validator.ValidationErrors{}))
 }
 
+// TestFormatValidationErrorsUsesJSONTags makes sure error keys are taken from
+// the JSON tags (so they match the request payload) rather than a naive
+// snake_case of the Go field name, which mangles names such as IDs /
+// DocumentIDs, and that slice element errors carry a clean indexed key.
+func TestFormatValidationErrorsUsesJSONTags(t *testing.T) {
+	type sample struct {
+		FullName    string   `json:"full_name" validate:"required"`
+		DocumentIDs []string `json:"document_ids" validate:"omitempty,dive,uuid"`
+		IDs         []string `json:"ids" validate:"omitempty,dive,uuid"`
+	}
+
+	err := NewValidator().Struct(sample{
+		DocumentIDs: []string{"not-a-uuid"},
+		IDs:         []string{"also-not-a-uuid"},
+	})
+	assert.Error(t, err)
+
+	byKey := make(map[string]string)
+	for _, e := range FormatValidationErrors(err) {
+		byKey[e.Key] = e.Message
+	}
+
+	assert.Equal(t, "is required", byKey["full_name"])
+	assert.Equal(t, "must be a valid UUID", byKey["document_ids[0]"])
+	assert.Equal(t, "must be a valid UUID", byKey["ids[0]"])
+}
+
+// TestValidationSummary covers the human-readable message shown to the
+// frontend, built by joining the field-level errors.
+func TestValidationSummary(t *testing.T) {
+	assert.Equal(t, "Validation failed", validationSummary(nil))
+
+	single := []FieldError{{Key: "full_name", Message: "contains unsupported characters"}}
+	assert.Equal(t, "full_name contains unsupported characters", validationSummary(single))
+
+	multi := []FieldError{
+		{Key: "motivation", Message: "is required"},
+		{Key: "document_ids[0]", Message: "must be a valid UUID"},
+	}
+	assert.Equal(t, "motivation is required; document_ids[0] must be a valid UUID", validationSummary(multi))
+}
+
 // TestGeneralFieldValidators covers the leazi-style general rules carried by
 // NewValidator: name letters, free-text punctuation, phone format and
 // password strength.
