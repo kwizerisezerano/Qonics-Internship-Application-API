@@ -144,17 +144,20 @@ func (ac *AuthController) Register(c *fiber.Ctx) error {
 	// Log successful registration
 	utils.RecordSuccessActivityLog(c, ac.DB, userID, "USER_REGISTER", "User registered successfully", nil)
 
-	// Send welcome email notification
+	// Send welcome email notification (rendered from the user_welcome template).
 	welcomeSubject := "Welcome to Qonics Internship Program"
-	welcomeBody := fmt.Sprintf("Dear %s,\n\nWelcome to the Qonics Internship Program! Your account has been successfully created.\n\nYou can now log in and start your application process.\n\nBest regards,\nThe Qonics Team", req.FullName)
-	if err := utils.PublishEmailNotification(ctx, ac.Redis, req.Email, welcomeSubject, welcomeBody, false); err != nil {
+	welcomeMessage := fmt.Sprintf("Your account has been successfully created, %s. Start your application now!", req.FullName)
+	if err := utils.PublishTemplatedEmailNotification(ctx, ac.Redis, req.Email, welcomeSubject, "user_welcome", map[string]interface{}{
+		"name":  req.FullName,
+		"email": req.Email,
+	}); err != nil {
 		// Log warning but don't fail the registration
 		// TODO: Use proper logger when available
 		fmt.Printf("WARNING: Failed to send welcome email: %v\n", err)
 	}
 
 	// Send in-app notification
-	if err := utils.PublishInAppNotification(ctx, ac.Redis, userID, "Welcome!", "Your account has been successfully created. Start your application now!"); err != nil {
+	if err := utils.PublishInAppNotification(ctx, ac.Redis, userID, "Welcome!", welcomeMessage); err != nil {
 		// Log warning but don't fail the registration
 		fmt.Printf("WARNING: Failed to send in-app notification: %v\n", err)
 	}

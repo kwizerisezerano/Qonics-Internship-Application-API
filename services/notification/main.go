@@ -5,14 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/smtp"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/qonics/qonics-appy-api/libs/shared-package/config"
 	"github.com/qonics/qonics-appy-api/libs/shared-package/logger"
+	"github.com/qonics/qonics-appy-api/libs/shared-package/utils"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -21,6 +24,7 @@ type NotificationEvent struct {
 	RecipientID   string                 `json:"recipient_id"`
 	RecipientType string                 `json:"recipient_type"` // USER or EMAIL
 	Subject       string                 `json:"subject"`
+	Template      string                 `json:"template,omitempty"` // HTML template name (leazi pattern)
 	Content       string                 `json:"content"`
 	Data          map[string]interface{} `json:"data"`
 	UserID        int                    `json:"user_id,omitempty"`
@@ -173,16 +177,80 @@ func processNotification(ctx context.Context, rdb *redis.Client, db *pgxpool.Poo
 }
 
 func sendEmail(event *NotificationEvent, cfg *config.Config) error {
-	// In development, just log the email
-	// In production, this would use SMTP to send actual emails
-	log.Printf("[EMAIL] To: %s, Subject: %s, Content: %s",
-		event.RecipientID, event.Subject, event.Content)
-	log.Printf("[EMAIL] SMTP Config: Host=%s, Port=%s, User=%s",
-		cfg.Email.Host, cfg.Email.Port, cfg.Email.User)
+	if cfg.Email.Host == "" || cfg.Email.User == "" {
+		return fmt.Errorf("email transport is not configured (SMTP_HOST/SMTP_USER missing)")
+	}
+	if event.RecipientID == "" {
+		return fmt.Errorf("email recipient is empty")
+	}
 
-	// TODO: Implement SMTP email sending with templates
-	// For now, return success for development
+	// Prefer an HTML template when one is set (leazi pattern); fall back to the
+	// plain content if rendering fails or no template was provided.
+	var (
+		body        string
+		contentType string
+	)
+	if event.Template != "" {
+		// Inject shared template data used by the header/footer partials.
+		if event.Data == nil {
+			event.Data = map[string]interface{}{}
+		}
+		if _, ok := event.Data["Year"]; !ok {
+			event.Data["Year"] = time.Now().Year()
+		}
+
+		rendered, err := utils.GenerateHtmlTemplate(event.Template, event.Data)
+		if err != nil {
+			log.Printf("WARNING: failed to render email template %q: %v", event.Template, err)
+			body = event.Content
+			contentType = "text/plain; charset=UTF-8"
+		} else {
+			body = rendered
+			contentType = "text/html; charset=UTF-8"
+		}
+	} else {
+		isHTML, _ := event.Data["is_html"].(bool)
+		body = event.Content
+		contentType = "text/plain; charset=UTF-8"
+		if isHTML {
+			contentType = "text/html; charset=UTF-8"
+		}
+	}
+
+	from := cfg.Email.From
+	if from == "" {
+		from = cfg.Email.User
+	}
+
+	msg := buildEmailMessage(from, event.RecipientID, event.Subject, body, contentType)
+
+	// App passwords (e.g. Gmail) are displayed with spaces for readability; the
+	// actual credential has none, so strip them before authenticating.
+	password := strings.ReplaceAll(cfg.Email.Password, " ", "")
+	auth := smtp.PlainAuth("", cfg.Email.User, password, cfg.Email.Host)
+
+	addr := cfg.Email.Host + ":" + cfg.Email.Port
+	if err := smtp.SendMail(addr, auth, from, []string{event.RecipientID}, msg); err != nil {
+		return fmt.Errorf("smtp send failed: %w", err)
+	}
+
+	log.Printf("[EMAIL] Sent to %s (subject=%q, template=%q)", event.RecipientID, event.Subject, event.Template)
 	return nil
+}
+
+// buildEmailMessage assembles a minimal RFC 5322 message. Header values are
+// sanitised (CR/LF removed) to prevent header injection.
+func buildEmailMessage(from, to, subject, body, contentType string) []byte {
+	sanitize := strings.NewReplacer("\r", "", "\n", " ").Replace
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "From: %s\r\n", sanitize(from))
+	fmt.Fprintf(&b, "To: %s\r\n", sanitize(to))
+	fmt.Fprintf(&b, "Subject: %s\r\n", sanitize(subject))
+	fmt.Fprintf(&b, "MIME-Version: 1.0\r\n")
+	fmt.Fprintf(&b, "Content-Type: %s\r\n", contentType)
+	fmt.Fprintf(&b, "\r\n%s", body)
+	return []byte(b.String())
 }
 
 func sendInAppNotification(ctx context.Context, db *pgxpool.Pool, event *NotificationEvent) error {

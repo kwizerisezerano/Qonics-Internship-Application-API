@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/qonics/qonics-appy-api/libs/shared-package/config"
@@ -10,6 +13,158 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGenerateHtmlTemplate(t *testing.T) {
+	// Point the shared helper at this service's templates directory regardless
+	// of the current working directory (other tests may chdir).
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	utils.EmailTemplatesDir = filepath.Join(filepath.Dir(thisFile), "templates")
+
+	tests := []struct {
+		name        string
+		template    string
+		data        map[string]interface{}
+		wantContain []string
+	}{
+		{
+			name:     "application submitted",
+			template: "application_submitted",
+			data: map[string]interface{}{
+				"name":           "Alice",
+				"reference":      "APP-123",
+				"department":     "software",
+				"specialization": "backend",
+				"Year":           2026,
+			},
+			wantContain: []string{"Alice", "APP-123", "software", "backend", "QONICS"},
+		},
+		{
+			name:     "status updated",
+			template: "application_status_updated",
+			data: map[string]interface{}{
+				"name":      "Bob",
+				"reference": "APP-456",
+				"status":    "interview",
+				"note":      "Please join at 10:00",
+				"Year":      2026,
+			},
+			wantContain: []string{"Bob", "APP-456", "interview", "Please join at 10:00"},
+		},
+		{
+			name:     "admin new application",
+			template: "admin_new_application",
+			data: map[string]interface{}{
+				"applicant_name": "Carol",
+				"reference":      "APP-789",
+				"department":     "iot",
+				"specialization": "embedded",
+				"Year":           2026,
+			},
+			wantContain: []string{"Carol", "APP-789", "iot", "embedded"},
+		},
+		{
+			name:     "user welcome",
+			template: "user_welcome",
+			data: map[string]interface{}{
+				"name":      "Dave",
+				"email":     "dave@example.com",
+				"login_url": "https://app.qonics.com/login",
+				"Year":      2026,
+			},
+			wantContain: []string{"Dave", "dave@example.com", "https://app.qonics.com/login"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rendered, err := utils.GenerateHtmlTemplate(tt.template, tt.data)
+			require.NoError(t, err)
+			for _, want := range tt.wantContain {
+				assert.Contains(t, rendered, want)
+			}
+			assert.Contains(t, rendered, "QONICS")       // shared header partial rendered
+			assert.Contains(t, rendered, "Do not reply") // shared footer partial rendered
+		})
+	}
+}
+
+func TestBuildEmailMessage(t *testing.T) {
+	tests := []struct {
+		name        string
+		from        string
+		to          string
+		subject     string
+		body        string
+		contentType string
+		wantHeaders []string
+		wantAbsent  []string
+		wantBody    string
+	}{
+		{
+			name:        "plain text message",
+			from:        "noreply@qonics.com",
+			to:          "student@example.com",
+			subject:     "Application Submitted",
+			body:        "Your application was received.",
+			contentType: "text/plain; charset=UTF-8",
+			wantHeaders: []string{
+				"From: noreply@qonics.com\r\n",
+				"To: student@example.com\r\n",
+				"Subject: Application Submitted\r\n",
+				"MIME-Version: 1.0\r\n",
+				"Content-Type: text/plain; charset=UTF-8\r\n",
+			},
+			wantBody: "Your application was received.",
+		},
+		{
+			name:        "html message",
+			from:        "noreply@qonics.com",
+			to:          "admin@qonics.com",
+			subject:     "New Application",
+			body:        "<p>Hello</p>",
+			contentType: "text/html; charset=UTF-8",
+			wantHeaders: []string{
+				"Content-Type: text/html; charset=UTF-8\r\n",
+			},
+			wantBody: "<p>Hello</p>",
+		},
+		{
+			name:        "header injection is sanitised",
+			from:        "noreply@qonics.com\r\nBcc: attacker@evil.com",
+			to:          "student@example.com\nX-Evil: 1",
+			subject:     "Hi\r\nBcc: attacker@evil.com",
+			body:        "body",
+			contentType: "text/plain; charset=UTF-8",
+			wantHeaders: []string{
+				"Subject: Hi Bcc: attacker@evil.com\r\n",
+			},
+			wantAbsent: []string{
+				"\r\nBcc: attacker@evil.com\r\n",
+				"\nX-Evil: 1",
+			},
+			wantBody: "body",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := string(buildEmailMessage(tt.from, tt.to, tt.subject, tt.body, tt.contentType))
+
+			for _, h := range tt.wantHeaders {
+				assert.Contains(t, msg, h)
+			}
+			for _, a := range tt.wantAbsent {
+				assert.NotContains(t, msg, a)
+			}
+
+			// Headers and body are separated by a single blank CRLF line.
+			parts := strings.SplitN(msg, "\r\n\r\n", 2)
+			require.Len(t, parts, 2)
+			assert.Equal(t, tt.wantBody, parts[1])
+		})
+	}
+}
 
 func TestNotificationWorkerInit(t *testing.T) {
 	utils.IsTestMode = true

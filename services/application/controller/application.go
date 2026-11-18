@@ -29,6 +29,35 @@ func NewApplicationController(db *pgxpool.Pool, cfg *config.Config, rdb *redis.C
 	}
 }
 
+// applicantContact resolves an applicant's decrypted email and full name from
+// their user id. It is intentionally best-effort: any lookup or decryption error
+// yields empty strings so callers can still notify over whichever channel is
+// available without failing the surrounding request.
+func (ac *ApplicationController) applicantContact(ctx context.Context, userID int) (email, name string) {
+	var emailEncrypted, nameEncrypted []byte
+	err := ac.DB.QueryRow(ctx, `
+		SELECT email_encrypted, full_name_encrypted
+		FROM applicant_profiles
+		WHERE user_id = $1
+	`, userID).Scan(&emailEncrypted, &nameEncrypted)
+	if err != nil {
+		fmt.Printf("WARNING: Failed to resolve applicant contact for user %d: %v\n", userID, err)
+		return "", ""
+	}
+
+	if len(nameEncrypted) > 0 {
+		if decrypted, decErr := utils.DecryptData(ctx, ac.DB, nameEncrypted); decErr == nil {
+			name = decrypted
+		}
+	}
+	if len(emailEncrypted) > 0 {
+		if decrypted, decErr := utils.DecryptData(ctx, ac.DB, emailEncrypted); decErr == nil {
+			email = decrypted
+		}
+	}
+	return email, name
+}
+
 // ListMine returns the current user's applications
 func (ac *ApplicationController) ListMine(c *fiber.Ctx) error {
 	userID := c.Locals("user_id")
@@ -306,12 +335,39 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		})
 	}
 
-	// Send in-app notification about application submission
-	notificationTitle := "Application Submitted Successfully"
-	notificationMessage := fmt.Sprintf("Your application for %s - %s has been submitted successfully. Reference: %s", req.Department, req.Specialization, reference)
-	if err := utils.PublishInAppNotification(ctx, ac.Redis, userIDInt, notificationTitle, notificationMessage); err != nil {
-		// Log warning but don't fail the creation
+	// Notify the applicant over both channels (in-app + email) and fan out to
+	// every admin. Notification failures must never fail the submission, so they
+	// are logged only. Emails are rendered from HTML templates (leazi pattern).
+	applicantEmail, applicantName := ac.applicantContact(ctx, userIDInt)
+	if applicantName == "" {
+		applicantName = "An applicant"
+	}
+
+	applicantSubject := "Application Submitted Successfully"
+	applicantMessage := fmt.Sprintf("Your application for %s - %s has been submitted successfully. Reference: %s", req.Department, req.Specialization, reference)
+	if err := utils.PublishInAppNotification(ctx, ac.Redis, userIDInt, applicantSubject, applicantMessage); err != nil {
 		fmt.Printf("WARNING: Failed to send application submission notification: %v\n", err)
+	}
+	if applicantEmail != "" {
+		if err := utils.PublishTemplatedEmailNotification(ctx, ac.Redis, applicantEmail, applicantSubject, "application_submitted", map[string]interface{}{
+			"name":           applicantName,
+			"reference":      reference,
+			"department":     req.Department,
+			"specialization": req.Specialization,
+		}); err != nil {
+			fmt.Printf("WARNING: Failed to send application submission email: %v\n", err)
+		}
+	}
+
+	adminSubject := "New Application Submitted"
+	adminMessage := fmt.Sprintf("%s submitted an application for %s - %s. Reference: %s", applicantName, req.Department, req.Specialization, reference)
+	if err := utils.NotifyAdmins(ctx, ac.DB, ac.Redis, adminSubject, adminMessage, "admin_new_application", map[string]interface{}{
+		"applicant_name": applicantName,
+		"reference":      reference,
+		"department":     req.Department,
+		"specialization": req.Specialization,
+	}); err != nil {
+		fmt.Printf("WARNING: Failed to notify admins of new application: %v\n", err)
 	}
 
 	// Fetch created application
@@ -411,20 +467,33 @@ func (ac *ApplicationController) UpdateStatus(c *fiber.Ctx) error {
 
 	// Get user_id for notification
 	var applicantUserID int
+	var reference string
 	err = ac.DB.QueryRow(ctx, `
-		SELECT ap.user_id
+		SELECT ap.user_id, a.reference
 		FROM applications a
 		JOIN applicant_profiles ap ON a.applicant_id = ap.id
 		WHERE a.id = $1
-	`, id).Scan(&applicantUserID)
+	`, id).Scan(&applicantUserID, &reference)
 
 	if err == nil && applicantUserID > 0 {
-		// Send in-app notification about status change
+		// Notify the applicant over both channels (in-app + email). The student
+		// must learn about a status change regardless of which channel they use.
+		// The email is rendered from an HTML template (leazi pattern).
 		notificationTitle := fmt.Sprintf("Application Status Updated: %s", req.Status)
 		notificationMessage := fmt.Sprintf("Your application status has been updated to %s. %s", req.Status, req.Note)
 		if err := utils.PublishInAppNotification(ctx, ac.Redis, applicantUserID, notificationTitle, notificationMessage); err != nil {
 			// Log warning but don't fail the update
 			fmt.Printf("WARNING: Failed to send status update notification: %v\n", err)
+		}
+		if applicantEmail, applicantName := ac.applicantContact(ctx, applicantUserID); applicantEmail != "" {
+			if err := utils.PublishTemplatedEmailNotification(ctx, ac.Redis, applicantEmail, notificationTitle, "application_status_updated", map[string]interface{}{
+				"name":      applicantName,
+				"reference": reference,
+				"status":    req.Status,
+				"note":      req.Note,
+			}); err != nil {
+				fmt.Printf("WARNING: Failed to send status update email: %v\n", err)
+			}
 		}
 	}
 
