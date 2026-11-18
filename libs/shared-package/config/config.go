@@ -102,6 +102,13 @@ func LoadConfig(serviceName string) (*Config, error) {
 	viper.BindEnv("jwt.secret", "JWT_SECRET")
 	viper.BindEnv("encryption.key", "ENCRYPTION_KEY")
 
+	// Cloudflare R2 configuration (file service)
+	viper.BindEnv("cloudflare.account_id", "CLOUDFLARE_ACCOUNT_ID")
+	viper.BindEnv("cloudflare.access_key_id", "CLOUDFLARE_ACCESS_KEY_ID")
+	viper.BindEnv("cloudflare.secret_access_key", "CLOUDFLARE_SECRET_ACCESS_KEY")
+	viper.BindEnv("cloudflare.bucket_name", "CLOUDFLARE_BUCKET_NAME")
+	viper.BindEnv("cdn_url", "CDN_URL")
+
 	config := &Config{
 		ServiceName: serviceName,
 		Port:        viper.GetString("port"),

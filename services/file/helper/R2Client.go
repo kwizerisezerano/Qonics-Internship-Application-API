@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
+	"github.com/spf13/viper"
 )
 
 // GenerateUUID generates a new UUID string
@@ -30,10 +30,10 @@ var R2ClientFactory = NewR2Client
 
 // NewR2Client creates a new R2Client with the specified credentials
 func NewR2Client() (*R2Client, error) {
-	accountID := os.Getenv("CLOUDFLARE_ACCOUNT_ID")
-	accessKeyID := os.Getenv("CLOUDFLARE_ACCESS_KEY_ID")
-	secretAccessKey := os.Getenv("CLOUDFLARE_SECRET_ACCESS_KEY")
-	bucketName := os.Getenv("CLOUDFLARE_BUCKET_NAME")
+	accountID := viper.GetString("cloudflare.account_id")
+	accessKeyID := viper.GetString("cloudflare.access_key_id")
+	secretAccessKey := viper.GetString("cloudflare.secret_access_key")
+	bucketName := viper.GetString("cloudflare.bucket_name")
 
 	if accountID == "" || accessKeyID == "" || secretAccessKey == "" || bucketName == "" {
 		return nil, fmt.Errorf("missing required cloudflare r2 configuration")
@@ -169,7 +169,7 @@ func (r *R2Client) UploadPublicFile(fileName string, fileData io.Reader, fileSiz
 	}
 
 	// Construct the public URL using CDN_URL from config
-	cdnURL := os.Getenv("CDN_URL")
+	cdnURL := viper.GetString("cdn_url")
 	if cdnURL == "" {
 		cdnURL = "https://cdn.qonics.io"
 	}
