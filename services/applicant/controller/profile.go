@@ -117,6 +117,11 @@ func (ac *ApplicantController) SaveProfile(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
+	if err := model.Validate.Struct(&req); err != nil {
+		// Known error - invalid payload, no logging
+		return utils.JsonValidationErrorResponse(c, err)
+	}
+
 	ctx := context.Background()
 
 	// Convert userID to int for database query
@@ -518,6 +523,11 @@ func (ac *ApplicantController) MarkNotificationsRead(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
+	if err := model.Validate.Struct(&req); err != nil {
+		// Known error - invalid payload, no logging
+		return utils.JsonValidationErrorResponse(c, err)
+	}
+
 	ctx := context.Background()
 
 	// Convert userID to int for database query
@@ -613,6 +623,11 @@ func (ac *ApplicantController) SaveSettings(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		// Known error - invalid request body, no logging
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if err := model.Validate.Struct(&req); err != nil {
+		// Known error - invalid payload, no logging
+		return utils.JsonValidationErrorResponse(c, err)
 	}
 
 	ctx := context.Background()

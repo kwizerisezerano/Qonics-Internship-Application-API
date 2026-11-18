@@ -1,22 +1,28 @@
 package model
 
+import "github.com/go-playground/validator/v10"
+
+// Validate is the validator used for incoming applicant payloads (profile,
+// settings, notifications).
+var Validate = validator.New()
+
 type ApplicantProfile struct {
 	ID             string   `json:"id"`
-	FullName       string   `json:"full_name"`
-	Email          string   `json:"email"`
-	Phone          string   `json:"phone"`
-	Country        string   `json:"country"`
-	City           string   `json:"city"`
-	Institution    string   `json:"institution"`
-	FieldOfStudy   string   `json:"field_of_study"`
-	Qualification  string   `json:"qualification"`
-	AcademicStatus string   `json:"academic_status"`
-	GraduationYear *int     `json:"graduation_year"`
+	FullName       string   `json:"full_name" validate:"omitempty,max=150"`
+	Email          string   `json:"email" validate:"omitempty,email"`
+	Phone          string   `json:"phone" validate:"omitempty,max=30"`
+	Country        string   `json:"country" validate:"omitempty,max=100"`
+	City           string   `json:"city" validate:"omitempty,max=100"`
+	Institution    string   `json:"institution" validate:"omitempty,max=200"`
+	FieldOfStudy   string   `json:"field_of_study" validate:"omitempty,max=200"`
+	Qualification  string   `json:"qualification" validate:"omitempty,max=200"`
+	AcademicStatus string   `json:"academic_status" validate:"omitempty,max=50"`
+	GraduationYear *int     `json:"graduation_year" validate:"omitempty,gte=1950,lte=2100"`
 	Skills         []string `json:"skills"`
-	Bio            string   `json:"bio"`
-	GithubUrl      string   `json:"github_url"`
-	LinkedinUrl    string   `json:"linkedin_url"`
-	PortfolioUrl   string   `json:"portfolio_url"`
+	Bio            string   `json:"bio" validate:"omitempty,max=2000"`
+	GithubUrl      string   `json:"github_url" validate:"omitempty,url"`
+	LinkedinUrl    string   `json:"linkedin_url" validate:"omitempty,url"`
+	PortfolioUrl   string   `json:"portfolio_url" validate:"omitempty,url"`
 }
 
 type ApplicantSummary struct {
@@ -36,7 +42,7 @@ type AppNotification struct {
 type AppSettings struct {
 	ApplicationsOpen bool   `json:"applications_open"`
 	CloseOn          string `json:"close_on"`
-	ClosureMessage   string `json:"closure_message"`
+	ClosureMessage   string `json:"closure_message" validate:"omitempty,max=500"`
 }
 
 type MarkNotificationsReadRequest struct {

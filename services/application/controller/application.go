@@ -204,7 +204,7 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 	// enumerated fields) before touching the database.
 	if err := model.Validate.Struct(&req); err != nil {
 		// Known error - invalid payload, no logging
-		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Validation failed")
+		return utils.JsonValidationErrorResponse(c, err)
 	}
 
 	// Get applicant profile ID
@@ -339,6 +339,11 @@ func (ac *ApplicationController) UpdateStatus(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
+	if err := model.Validate.Struct(&req); err != nil {
+		// Known error - invalid payload, no logging
+		return utils.JsonValidationErrorResponse(c, err)
+	}
+
 	ctx := context.Background()
 
 	// Get current status
@@ -450,6 +455,11 @@ func (ac *ApplicationController) AddNote(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		// Known error - invalid request body, no logging
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if err := model.Validate.Struct(&req); err != nil {
+		// Known error - invalid payload, no logging
+		return utils.JsonValidationErrorResponse(c, err)
 	}
 
 	ctx := context.Background()

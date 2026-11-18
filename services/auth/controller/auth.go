@@ -40,7 +40,7 @@ func (ac *AuthController) Register(c *fiber.Ctx) error {
 	}
 
 	if err := model.Validate.Struct(&req); err != nil {
-		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Validation failed")
+		return utils.JsonValidationErrorResponse(c, err)
 	}
 
 	ctx := context.Background()
@@ -179,7 +179,7 @@ func (ac *AuthController) Login(c *fiber.Ctx) error {
 	}
 
 	if err := model.Validate.Struct(&req); err != nil {
-		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Validation failed")
+		return utils.JsonValidationErrorResponse(c, err)
 	}
 
 	ctx := context.Background()
@@ -290,6 +290,10 @@ func (ac *AuthController) ForgotPassword(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
+	if err := model.Validate.Struct(&req); err != nil {
+		return utils.JsonValidationErrorResponse(c, err)
+	}
+
 	// In a real implementation, send email with reset token
 	// For now, just return success
 	return utils.JsonSuccessResponse(c, "If an account exists with this email, a password reset link has been sent", nil)
@@ -302,6 +306,10 @@ func (ac *AuthController) ResetPassword(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
+	if err := model.Validate.Struct(&req); err != nil {
+		return utils.JsonValidationErrorResponse(c, err)
+	}
+
 	// In a real implementation, validate token and update password
 	return utils.JsonSuccessResponse(c, "Password reset successful", nil)
 }
@@ -311,6 +319,10 @@ func (ac *AuthController) ChangePassword(c *fiber.Ctx) error {
 	var req model.ChangePasswordRequest
 	if err := c.BodyParser(&req); err != nil {
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if err := model.Validate.Struct(&req); err != nil {
+		return utils.JsonValidationErrorResponse(c, err)
 	}
 
 	userID := c.Locals("user_id")

@@ -57,7 +57,7 @@ func (fc *FileController) GetPresignedURL(c *fiber.Ctx) error {
 	}
 
 	if err := Validate.Struct(request); err != nil {
-		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Validation failed")
+		return utils.JsonValidationErrorResponse(c, err)
 	}
 
 	// Initialize R2 client
@@ -129,7 +129,7 @@ func (fc *FileController) ConfirmFileUpload(c *fiber.Ctx) error {
 	}
 
 	if err := Validate.Struct(request); err != nil {
-		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Validation failed")
+		return utils.JsonValidationErrorResponse(c, err)
 	}
 
 	// Only known source tables may own a file (leazi-style allow-list).
