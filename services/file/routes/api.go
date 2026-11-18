@@ -15,4 +15,5 @@ func SetupRoutes(app *fiber.App, fileController *controller.FileController, jwtS
 
 	files.Post("/presigned-url", fileController.GetPresignedURL)
 	files.Post("/confirm-upload", fileController.ConfirmFileUpload)
+	files.Get("/:file_id/url", fileController.GetFileURL)
 }

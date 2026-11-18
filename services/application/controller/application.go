@@ -167,11 +167,11 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		})
 	}
 
-	// Link document records to application
+	// Link document records to application (generic source_table/source_table_id pair)
 	for _, docID := range req.DocumentIDs {
 		_, err = ac.DB.Exec(ctx, `
-			UPDATE application_documents
-			SET application_id = $1
+			UPDATE files
+			SET source_table = 'applications', source_table_id = $1
 			WHERE id = $2
 		`, appID, docID)
 
@@ -551,8 +551,9 @@ func (ac *ApplicationController) fetchApplications(ctx context.Context, applican
 
 func (ac *ApplicationController) fetchDocuments(ctx context.Context, applicationID string) ([]model.ApplicationDocument, error) {
 	rows, err := ac.DB.Query(ctx, `
-		SELECT id, document_type, file_name, file_size, uploaded_at
-		FROM application_documents WHERE application_id = $1
+		SELECT id, file_type, name, file_size, COALESCE(uploaded_at, created_at)
+		FROM files
+		WHERE source_table = 'applications' AND source_table_id = $1
 	`, applicationID)
 
 	if err != nil {

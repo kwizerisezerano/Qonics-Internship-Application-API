@@ -11,7 +11,7 @@ migrations=(
     "001_create_users_table_up.sql"
     "002_create_applicant_profiles_table_up.sql"
     "003_create_applications_table_up.sql"
-    "004_create_application_documents_table_up.sql"
+    "004_create_files_table_up.sql"
     "005_create_application_history_table_up.sql"
     "006_create_review_notes_table_up.sql"
     "007_create_notifications_table_up.sql"

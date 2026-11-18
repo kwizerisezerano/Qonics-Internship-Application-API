@@ -1,0 +1,428 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Qonics Internship Application API - File Service",
+    "description": "File upload flow (leazi pattern): request a presigned PUT URL, upload the object to R2 directly, then confirm. All endpoints are exposed through the KrakenD gateway and require a Bearer JWT (from POST /auth/login -> data.token).",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080",
+      "description": "KrakenD gateway"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Files",
+      "description": "Presigned upload / confirm / download"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/files/presigned-url": {
+      "post": {
+        "tags": ["Files"],
+        "summary": "Request a presigned upload URL",
+        "description": "Creates a pending file record (deleted_at set 24h in the future) and returns a presigned PUT URL. Upload the file body to the returned presigned_url, then call POST /files/confirm-upload. Unconfirmed records are hard-deleted by the cleanup worker after 24h.",
+        "operationId": "getPresignedURL",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PresignedURLRequest"
+              },
+              "example": {
+                "file_name": "kwizera-cv.pdf",
+                "file_type": "cv",
+                "file_size": 245318,
+                "description": "My updated CV"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Presigned URL generated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresignedURLEnvelope"
+                },
+                "example": {
+                  "status": 200,
+                  "message": "Presigned URL generated successfully",
+                  "data": {
+                    "presigned_url": "https://<bucket>.r2.cloudflarestorage.com/files/cv/9f1c...-kwizera-cv.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=900&X-Amz-Signature=...",
+                    "file_id": "8f2c1d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f",
+                    "object_key": "files/cv/9f1c2ab3-dd44-4e55-8f66-7708990aabbc-kwizera-cv.pdf",
+                    "expires_in": 900
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request format or validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Storage client error or failed to create file record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/files/confirm-upload": {
+      "post": {
+        "tags": ["Files"],
+        "summary": "Confirm a completed upload",
+        "description": "Clears the pending marker (deleted_at -> NULL) and stamps uploaded_at. Optionally attaches the file to its owning record via the generic source_table / source_table_id pair plus arbitrary extra metadata (leazi pattern).",
+        "operationId": "confirmFileUpload",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmUploadRequest"
+              },
+              "example": {
+                "file_id": "8f2c1d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f",
+                "object_key": "files/cv/9f1c2ab3-dd44-4e55-8f66-7708990aabbc-kwizera-cv.pdf",
+                "source_table": "applications",
+                "source_table_id": "app_01HZX9K2M4",
+                "description": "My updated CV",
+                "extra": {
+                  "original_name": "kwizera-cv.pdf",
+                  "mime_type": "application/pdf"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Upload confirmed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmUploadEnvelope"
+                },
+                "example": {
+                  "status": 200,
+                  "message": "Upload confirmed",
+                  "data": {
+                    "file_id": "8f2c1d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request format or validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File record not found or already confirmed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to confirm upload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/files/{file_id}/url": {
+      "get": {
+        "tags": ["Files"],
+        "summary": "Get a presigned download URL",
+        "description": "Returns a short-lived presigned GET URL for a confirmed file. Only the file owner or an admin may request it.",
+        "operationId": "getFileURL",
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "description": "File id returned by POST /files/presigned-url",
+            "schema": {
+              "type": "string"
+            },
+            "example": "8f2c1d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File URL generated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileURLEnvelope"
+                },
+                "example": {
+                  "status": 200,
+                  "message": "File URL generated",
+                  "data": {
+                    "file_id": "8f2c1d3e-4b5a-4c6d-9e7f-0a1b2c3d4e5f",
+                    "url": "https://<bucket>.r2.cloudflarestorage.com/files/cv/9f1c...-kwizera-cv.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=900&X-Amz-Signature=..."
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden (not owner and not admin)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to generate file URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "PresignedURLRequest": {
+        "type": "object",
+        "required": ["file_name", "file_type", "file_size"],
+        "properties": {
+          "file_name": {
+            "type": "string",
+            "example": "kwizera-cv.pdf"
+          },
+          "file_type": {
+            "type": "string",
+            "enum": ["cv", "transcript", "diploma", "certificates", "cover_letter"],
+            "example": "cv"
+          },
+          "file_size": {
+            "type": "integer",
+            "format": "int64",
+            "example": 245318
+          },
+          "description": {
+            "type": "string",
+            "example": "My updated CV"
+          }
+        }
+      },
+      "PresignedURLData": {
+        "type": "object",
+        "properties": {
+          "presigned_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "file_id": {
+            "type": "string"
+          },
+          "object_key": {
+            "type": "string"
+          },
+          "expires_in": {
+            "type": "integer",
+            "description": "Seconds until the presigned URL expires",
+            "example": 900
+          }
+        }
+      },
+      "ConfirmUploadRequest": {
+        "type": "object",
+        "required": ["file_id", "object_key"],
+        "properties": {
+          "file_id": {
+            "type": "string"
+          },
+          "object_key": {
+            "type": "string"
+          },
+          "source_table": {
+            "type": "string",
+            "description": "Optional owning table name, e.g. applications",
+            "example": "applications"
+          },
+          "source_table_id": {
+            "type": "string",
+            "description": "Optional owning record id",
+            "example": "app_01HZX9K2M4"
+          },
+          "description": {
+            "type": "string"
+          },
+          "extra": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Arbitrary metadata stored as JSONB"
+          }
+        }
+      },
+      "PresignedURLEnvelope": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "integer",
+            "example": 200
+          },
+          "message": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/PresignedURLData"
+          }
+        }
+      },
+      "ConfirmUploadEnvelope": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "integer",
+            "example": 200
+          },
+          "message": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "file_id": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "FileURLEnvelope": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "integer",
+            "example": 200
+          },
+          "message": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "file_id": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string",
+                "format": "uri"
+              }
+            }
+          }
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "integer",
+            "example": 400
+          },
+          "message": {
+            "type": "string",
+            "example": "Validation failed"
+          }
+        }
+      }
+    }
+  }
+}

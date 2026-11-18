@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 
 	"github.com/gofiber/fiber/v2"
@@ -37,6 +38,11 @@ func main() {
 
 	// Initialize controllers
 	fileController := controller.NewFileController(db, cfg)
+
+	// Start background worker that removes unconfirmed (orphan) uploads
+	cleanupCtx, cancelCleanup := context.WithCancel(context.Background())
+	defer cancelCleanup()
+	controller.StartOrphanFileCleanup(cleanupCtx, db, cfg.ServiceName)
 
 	// Setup routes
 	routes.SetupRoutes(app, fileController, cfg.JWT.Secret)

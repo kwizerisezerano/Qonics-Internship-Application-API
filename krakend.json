@@ -624,6 +624,30 @@
           }
         }
       ]
+    },
+    {
+      "endpoint": "/files/{file_id}/url",
+      "method": "GET",
+      "output_encoding": "no-op",
+      "input_headers": [
+        "Accept",
+        "Authorization",
+        "authorization"
+      ],
+      "backend": [
+        {
+          "host": ["http://file:9000"],
+          "url_pattern": "/api/v1/files/{file_id}/url",
+          "encoding": "no-op",
+          "disable_host_sanitize": true,
+          "extra_config": {
+            "backend/http": {
+              "return_error_details": "backend_alias",
+              "status": [200, 400, 401, 403, 404, 500]
+            }
+          }
+        }
+      ]
     }
   ]
 }

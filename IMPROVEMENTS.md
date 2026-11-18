@@ -298,7 +298,7 @@ Updated migration sequence in `run-migrations.sh`:
 2. 001_create_users_table_up.sql
 3. 002_create_applicant_profiles_table_up.sql
 4. 003_create_applications_table_up.sql
-5. 004_create_application_documents_table_up.sql
+5. 004_create_files_table_up.sql
 6. 005_create_application_history_table_up.sql
 7. 006_create_review_notes_table_up.sql
 8. 007_create_notifications_table_up.sql
