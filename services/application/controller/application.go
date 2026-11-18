@@ -50,7 +50,15 @@ func (ac *ApplicationController) ListMine(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusNotFound, "Applicant profile not found")
 	}
 
-	applications, err := ac.fetchApplications(ctx, profileID, "")
+	// Build the filtered WHERE clause (structured filters + caller scope + search).
+	filter, whereClause, params, err := ac.parseFilter(c, profileID)
+	if err != nil {
+		// Known error - invalid filter, no logging
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	// Summarise the caller's filtered applications by status for the dashboard.
+	summary, err := ac.applicationSummary(ctx, whereClause, params)
 	if err != nil {
 		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch applications", utils.Logger{
 			LogLevel:    utils.CRITICAL,
@@ -59,15 +67,22 @@ func (ac *ApplicationController) ListMine(c *fiber.Ctx) error {
 		})
 	}
 
-	// Summarise the caller's applications by status for the dashboard.
+	applications, err := ac.queryApplications(ctx, whereClause, params, filter.Limit, (filter.Page-1)*filter.Limit)
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch applications", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
 	if applications == nil {
 		applications = []model.Application{}
 	}
 
-	return utils.JsonSuccessResponse(c, "Applications retrieved", model.MineResponse{
+	return utils.JsonPaginatedSuccessResponse(c, "Applications retrieved", model.MineResponse{
 		Applications: applications,
-		Summary:      summarize(applications),
-	})
+		Summary:      summary,
+	}, utils.GeneratePaginationData(summary.Total, filter.Limit, filter.Page))
 }
 
 // ListAll returns all applications (admin only)
@@ -80,7 +95,14 @@ func (ac *ApplicationController) ListAll(c *fiber.Ctx) error {
 
 	ctx := context.Background()
 
-	applications, err := ac.fetchApplications(ctx, "", "")
+	filter, whereClause, params, err := ac.parseFilter(c, "")
+	if err != nil {
+		// Known error - invalid filter, no logging
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	// Dashboard aggregates (over the filtered set, not just the current page).
+	summary, err := ac.applicationSummary(ctx, whereClause, params)
 	if err != nil {
 		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch applications", utils.Logger{
 			LogLevel:    utils.CRITICAL,
@@ -89,17 +111,42 @@ func (ac *ApplicationController) ListAll(c *fiber.Ctx) error {
 		})
 	}
 
+	applications, err := ac.queryApplications(ctx, whereClause, params, filter.Limit, (filter.Page-1)*filter.Limit)
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch applications", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
 	if applications == nil {
 		applications = []model.Application{}
 	}
 
-	// Dashboard aggregates for the admin overview.
-	return utils.JsonSuccessResponse(c, "Applications retrieved", model.ListAllResponse{
+	byDepartment, err := ac.applicationsByDepartment(ctx, whereClause, params)
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch applications", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	trends, err := ac.applicationTrends(ctx, whereClause, params, 6)
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch applications", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	return utils.JsonPaginatedSuccessResponse(c, "Applications retrieved", model.ListAllResponse{
 		Applications: applications,
-		Summary:      summarize(applications),
-		ByDepartment: departmentCounts(applications),
-		Trends:       monthlyTrend(applications, 6),
-	})
+		Summary:      summary,
+		ByDepartment: byDepartment,
+		Trends:       trends,
+	}, utils.GeneratePaginationData(summary.Total, filter.Limit, filter.Page))
 }
 
 // Get returns a single application by ID
@@ -503,100 +550,174 @@ func (ac *ApplicationController) Availability(c *fiber.Ctx) error {
 	return utils.JsonSuccessResponse(c, "Availability retrieved", bookings)
 }
 
-// summarize counts applications by status.
-func summarize(applications []model.Application) model.ApplicationSummary {
-	summary := model.ApplicationSummary{Total: len(applications)}
-	for _, app := range applications {
-		switch app.Status {
-		case "submitted":
-			summary.Submitted++
-		case "under_review":
-			summary.UnderReview++
-		case "shortlisted":
-			summary.Shortlisted++
-		case "interview":
-			summary.Interview++
-		case "accepted":
-			summary.Accepted++
-		case "rejected":
-			summary.Rejected++
-		}
+// parseFilter reads the query string into an ApplicationFilter, applies the
+// leazi pagination defaults and builds the shared WHERE clause: the structured
+// filters via utils.BuildWhereClause, an optional caller scope and the global
+// search (plain columns with ILIKE, encrypted PII via the hash columns).
+func (ac *ApplicationController) parseFilter(c *fiber.Ctx, applicantID string) (model.ApplicationFilter, string, []any, error) {
+	filter := model.ApplicationFilter{}
+	if err := c.QueryParser(&filter); err != nil {
+		return filter, "", nil, fmt.Errorf("invalid query parameters")
 	}
-	return summary
+
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.Limit < 1 {
+		filter.Limit = 10
+	}
+	if filter.Limit > 100 {
+		filter.Limit = 100
+	}
+
+	from, err := parseFilterTime(c.Query("submitted_from"))
+	if err != nil {
+		return filter, "", nil, fmt.Errorf("invalid submitted_from")
+	}
+	filter.SubmittedFrom = from
+
+	to, err := parseFilterTime(c.Query("submitted_to"))
+	if err != nil {
+		return filter, "", nil, fmt.Errorf("invalid submitted_to")
+	}
+	filter.SubmittedTo = to
+
+	whereClause, _, params, err := utils.BuildWhereClause(&filter)
+	if err != nil {
+		return filter, "", nil, err
+	}
+
+	if applicantID != "" {
+		params = append(params, applicantID)
+		whereClause = utils.AppendCondition(whereClause, fmt.Sprintf("a.applicant_id = $%d", len(params)))
+	}
+
+	whereClause, params = utils.AppendSearchClause(whereClause, params,
+		[]string{"a.reference", "a.department", "a.specialization"},
+		[]string{"ap.full_name_hash", "ap.email_hash"},
+		filter.Search,
+	)
+
+	return filter, whereClause, params, nil
 }
 
-// departmentCounts groups applications by department, preserving first-seen order.
-func departmentCounts(applications []model.Application) []model.DepartmentCount {
+// parseFilterTime parses an optional date query parameter, accepting RFC3339 or
+// a plain YYYY-MM-DD date.
+func parseFilterTime(value string) (*time.Time, error) {
+	if value == "" {
+		return nil, nil
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02", "2006-01-02T15:04:05"} {
+		if t, err := time.Parse(layout, value); err == nil {
+			return &t, nil
+		}
+	}
+	return nil, fmt.Errorf("invalid date %q", value)
+}
+
+// applicationSummary counts the filtered applications by status. The COUNT(*)
+// also serves as the total used for pagination.
+func (ac *ApplicationController) applicationSummary(ctx context.Context, whereClause string, params []any) (model.ApplicationSummary, error) {
+	var s model.ApplicationSummary
+	err := ac.DB.QueryRow(ctx, `
+		SELECT COUNT(*),
+		       COUNT(*) FILTER (WHERE a.status = 'submitted'),
+		       COUNT(*) FILTER (WHERE a.status = 'under_review'),
+		       COUNT(*) FILTER (WHERE a.status = 'shortlisted'),
+		       COUNT(*) FILTER (WHERE a.status = 'interview'),
+		       COUNT(*) FILTER (WHERE a.status = 'accepted'),
+		       COUNT(*) FILTER (WHERE a.status = 'rejected')
+		FROM applications a
+		JOIN applicant_profiles ap ON a.applicant_id = ap.id
+	`+whereClause, params...).Scan(
+		&s.Total, &s.Submitted, &s.UnderReview, &s.Shortlisted,
+		&s.Interview, &s.Accepted, &s.Rejected,
+	)
+	return s, err
+}
+
+// applicationsByDepartment aggregates the filtered applications by department,
+// most applications first.
+func (ac *ApplicationController) applicationsByDepartment(ctx context.Context, whereClause string, params []any) ([]model.DepartmentCount, error) {
+	rows, err := ac.DB.Query(ctx, `
+		SELECT a.department, COUNT(*)
+		FROM applications a
+		JOIN applicant_profiles ap ON a.applicant_id = ap.id
+	`+whereClause+`
+		GROUP BY a.department
+		ORDER BY COUNT(*) DESC, a.department ASC
+	`, params...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := []model.DepartmentCount{}
+	for rows.Next() {
+		var dc model.DepartmentCount
+		if err := rows.Scan(&dc.Department, &dc.Count); err != nil {
+			return nil, err
+		}
+		counts = append(counts, dc)
+	}
+	return counts, nil
+}
+
+// applicationTrends returns the number of filtered applications submitted in
+// each of the last `months` months, oldest first.
+func (ac *ApplicationController) applicationTrends(ctx context.Context, whereClause string, params []any, months int) ([]model.TrendPoint, error) {
+	rows, err := ac.DB.Query(ctx, `
+		SELECT to_char(date_trunc('month', a.submitted_at), 'YYYY-MM'), COUNT(*)
+		FROM applications a
+		JOIN applicant_profiles ap ON a.applicant_id = ap.id
+	`+whereClause+`
+		GROUP BY 1
+	`, params...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
 	counts := map[string]int{}
-	order := []string{}
-	for _, app := range applications {
-		if _, seen := counts[app.Department]; !seen {
-			order = append(order, app.Department)
+	for rows.Next() {
+		var month string
+		var count int
+		if err := rows.Scan(&month, &count); err != nil {
+			return nil, err
 		}
-		counts[app.Department]++
+		counts[month] = count
 	}
 
-	result := make([]model.DepartmentCount, 0, len(order))
-	for _, department := range order {
-		result = append(result, model.DepartmentCount{Department: department, Count: counts[department]})
-	}
-	return result
-}
-
-// monthlyTrend counts applications submitted per month for the last `months`
-// months, oldest first, keyed on the short month name.
-func monthlyTrend(applications []model.Application, months int) []model.TrendPoint {
 	now := time.Now()
-	keys := make([]string, months)
 	points := make([]model.TrendPoint, months)
 	for i := 0; i < months; i++ {
 		d := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).AddDate(0, -(months - 1 - i), 0)
-		keys[i] = d.Format("2006-01")
-		points[i] = model.TrendPoint{Month: d.Format("Jan")}
+		points[i] = model.TrendPoint{Month: d.Format("Jan"), Count: counts[d.Format("2006-01")]}
 	}
-
-	for _, app := range applications {
-		submitted, err := time.Parse(time.RFC3339, app.SubmittedAt)
-		if err != nil {
-			continue
-		}
-		key := submitted.Format("2006-01")
-		for i := range keys {
-			if keys[i] == key {
-				points[i].Count++
-				break
-			}
-		}
-	}
-	return points
+	return points, nil
 }
 
-// Helper function to fetch applications with related data
-func (ac *ApplicationController) fetchApplications(ctx context.Context, applicantID string, applicationID string) ([]model.Application, error) {
-	query := `
-		SELECT a.id, a.reference, a.applicant_id, a.department, a.specialization,
-		       a.motivation, a.experience, a.start_date, a.education_level,
-		       a.session, a.duration_months, a.work_mode, a.status,
-		       a.submitted_at, a.interview_at,
-		       ap.full_name_encrypted, ap.email_encrypted, ap.phone_encrypted
-		FROM applications a
-		JOIN applicant_profiles ap ON a.applicant_id = ap.id
-	`
+// applicationSelect is the shared projection for application rows.
+const applicationSelect = `
+	SELECT a.id, a.reference, a.applicant_id, a.department, a.specialization,
+	       a.motivation, a.experience, a.start_date, a.education_level,
+	       a.session, a.duration_months, a.work_mode, a.status,
+	       a.submitted_at, a.interview_at,
+	       ap.full_name_encrypted, ap.email_encrypted, ap.phone_encrypted
+	FROM applications a
+	JOIN applicant_profiles ap ON a.applicant_id = ap.id
+`
 
-	args := []interface{}{}
-	argIndex := 1
+// queryApplications runs the shared application query with an optional
+// LIMIT/OFFSET. A non-positive limit fetches every matching row.
+func (ac *ApplicationController) queryApplications(ctx context.Context, whereClause string, params []any, limit int, offset int) ([]model.Application, error) {
+	query := applicationSelect + whereClause + " ORDER BY a.submitted_at DESC"
 
-	if applicantID != "" {
-		query += fmt.Sprintf(" WHERE a.applicant_id = $%d", argIndex)
-		args = append(args, applicantID)
-		argIndex++
-	} else if applicationID != "" {
-		query += fmt.Sprintf(" WHERE a.id = $%d", argIndex)
-		args = append(args, applicationID)
-		argIndex++
+	args := params
+	if limit > 0 {
+		args = append(append([]any{}, params...), limit, offset)
+		query += fmt.Sprintf(" LIMIT $%d OFFSET $%d", len(params)+1, len(params)+2)
 	}
-
-	query += " ORDER BY a.submitted_at DESC"
 
 	rows, err := ac.DB.Query(ctx, query, args...)
 	if err != nil {
@@ -604,6 +725,26 @@ func (ac *ApplicationController) fetchApplications(ctx context.Context, applican
 	}
 	defer rows.Close()
 
+	return ac.scanApplications(ctx, rows)
+}
+
+// fetchApplications fetches applications scoped by applicant or application id.
+func (ac *ApplicationController) fetchApplications(ctx context.Context, applicantID string, applicationID string) ([]model.Application, error) {
+	whereClause := ""
+	params := []any{}
+
+	if applicantID != "" {
+		whereClause = " WHERE a.applicant_id = $1"
+		params = append(params, applicantID)
+	} else if applicationID != "" {
+		whereClause = " WHERE a.id = $1"
+		params = append(params, applicationID)
+	}
+
+	return ac.queryApplications(ctx, whereClause, params, 0, 0)
+}
+
+func (ac *ApplicationController) scanApplications(ctx context.Context, rows pgx.Rows) ([]model.Application, error) {
 	var applications []model.Application
 	for rows.Next() {
 		var app model.Application

@@ -42,3 +42,30 @@ type AppSettings struct {
 type MarkNotificationsReadRequest struct {
 	IDs []string `json:"ids" validate:"required"`
 }
+
+// ApplicantFilter is the query contract for GET /applicants (admin). The tagged
+// fields are turned into a parameterised WHERE clause by utils.BuildWhereClause;
+// Search is a cross-column match handled in the controller (plain columns with
+// ILIKE, encrypted-PII columns via their hash).
+type ApplicantFilter struct {
+	Page  int `query:"page"`
+	Limit int `query:"limit"`
+
+	// Search matches institution / field_of_study (ILIKE) and the applicant
+	// full_name_hash / email_hash columns.
+	Search string `query:"search"`
+
+	Institution  string `query:"institution" field:"ap.institution" op:"ILIKE" validate:"omitempty,max=100"`
+	FieldOfStudy string `query:"field_of_study" field:"ap.field_of_study" op:"ILIKE" validate:"omitempty,max=100"`
+}
+
+// NotificationFilter is the query contract for GET /applicant/notifications.
+type NotificationFilter struct {
+	Page   int   `query:"page"`
+	Limit  int   `query:"limit"`
+	Read   *bool `query:"read" field:"n.read" op:"="`
+	Search string `query:"search"`
+
+	// UserID scopes the list to the caller; set in the controller.
+	UserID int `query:"-" field:"n.user_id" op:"="`
+}

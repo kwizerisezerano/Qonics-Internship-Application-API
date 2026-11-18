@@ -65,6 +65,17 @@ func JsonPaginatedResponse(c *fiber.Ctx, data interface{}, total int64, page int
 	})
 }
 
+// JsonPaginatedSuccessResponse returns a success response paired with a
+// leazi-style pagination meta block (see GeneratePaginationData).
+func JsonPaginatedSuccessResponse(c *fiber.Ctx, message string, data interface{}, meta map[string]any) error {
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"status":  fiber.StatusOK,
+		"message": message,
+		"data":    data,
+		"meta":    meta,
+	})
+}
+
 // TimeNowRFC3339 returns current time in RFC3339 format
 func TimeNowRFC3339() string {
 	return time.Now().Format(time.RFC3339)

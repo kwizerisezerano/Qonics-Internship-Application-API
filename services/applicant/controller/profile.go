@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -276,7 +277,48 @@ func (ac *ApplicantController) SaveProfile(c *fiber.Ctx) error {
 func (ac *ApplicantController) ListApplicants(c *fiber.Ctx) error {
 	ctx := context.Background()
 
-	rows, err := ac.DB.Query(ctx, `
+	filter := model.ApplicantFilter{}
+	if err := c.QueryParser(&filter); err != nil {
+		// Known error - invalid query parameters, no logging
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
+	}
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.Limit < 1 {
+		filter.Limit = 10
+	}
+	if filter.Limit > 100 {
+		filter.Limit = 100
+	}
+
+	whereClause, _, params, err := utils.BuildWhereClause(&filter)
+	if err != nil {
+		// Known error - invalid filter, no logging
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	whereClause, params = utils.AppendSearchClause(whereClause, params,
+		[]string{"ap.institution", "ap.field_of_study"},
+		[]string{"ap.full_name_hash", "ap.email_hash"},
+		filter.Search,
+	)
+
+	// Total count, independent of the current page.
+	var total int
+	err = ac.DB.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM applicant_profiles ap
+	`+whereClause, params...).Scan(&total)
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Database error", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	query := `
 		SELECT ap.id, ap.full_name_encrypted, ap.email_encrypted, ap.phone_encrypted,
 		       COALESCE(ap.country, ''), COALESCE(ap.city, ''), COALESCE(ap.institution, ''),
 		       COALESCE(ap.field_of_study, ''), COALESCE(ap.qualification, ''),
@@ -288,10 +330,14 @@ func (ac *ApplicantController) ListApplicants(c *fiber.Ctx) error {
 		FROM applicant_profiles ap
 		JOIN users u ON ap.user_id = u.id
 		LEFT JOIN applications a ON ap.id = a.applicant_id
+	` + whereClause + `
 		GROUP BY ap.id, u.created_at
 		ORDER BY u.created_at DESC
-	`)
+	` + fmt.Sprintf(" LIMIT $%d OFFSET $%d", len(params)+1, len(params)+2)
 
+	args := append(append([]any{}, params...), filter.Limit, (filter.Page-1)*filter.Limit)
+
+	rows, err := ac.DB.Query(ctx, query, args...)
 	if err != nil {
 		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Database error", utils.Logger{
 			LogLevel:    utils.CRITICAL,
@@ -358,22 +404,80 @@ func (ac *ApplicantController) ListApplicants(c *fiber.Ctx) error {
 		applicants = append(applicants, summary)
 	}
 
-	return utils.JsonSuccessResponse(c, "Applicants retrieved", applicants)
+	if applicants == nil {
+		applicants = []model.ApplicantSummary{}
+	}
+
+	return utils.JsonPaginatedSuccessResponse(c, "Applicants retrieved", applicants, utils.GeneratePaginationData(total, filter.Limit, filter.Page))
 }
 
 // ListNotifications returns notifications for the current user
 func (ac *ApplicantController) ListNotifications(c *fiber.Ctx) error {
 	userID := c.Locals("user_id")
+
+	// Check if user is authenticated
+	if userID == nil {
+		return utils.JsonErrorResponse(c, fiber.StatusUnauthorized, "Unauthorized")
+	}
+
 	ctx := context.Background()
 
 	// Convert userID to int for database query
 	userIDInt := int(userID.(float64))
-	rows, err := ac.DB.Query(ctx, `
-		SELECT id, title, message, at, read
-		FROM notifications WHERE user_id = $1
-		ORDER BY at DESC
-	`, userIDInt)
 
+	filter := model.NotificationFilter{}
+	if err := c.QueryParser(&filter); err != nil {
+		// Known error - invalid query parameters, no logging
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
+	}
+	filter.UserID = userIDInt
+
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.Limit < 1 {
+		filter.Limit = 10
+	}
+	if filter.Limit > 100 {
+		filter.Limit = 100
+	}
+
+	whereClause, _, params, err := utils.BuildWhereClause(&filter)
+	if err != nil {
+		// Known error - invalid filter, no logging
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	whereClause, params = utils.AppendSearchClause(whereClause, params,
+		[]string{"n.title", "n.message"},
+		nil,
+		filter.Search,
+	)
+
+	// Total count, independent of the current page.
+	var total int
+	err = ac.DB.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM notifications n
+	`+whereClause, params...).Scan(&total)
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Database error", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	query := `
+		SELECT n.id, n.title, n.message, n.at, n.read
+		FROM notifications n
+	` + whereClause + `
+		ORDER BY n.at DESC
+	` + fmt.Sprintf(" LIMIT $%d OFFSET $%d", len(params)+1, len(params)+2)
+
+	args := append(append([]any{}, params...), filter.Limit, (filter.Page-1)*filter.Limit)
+
+	rows, err := ac.DB.Query(ctx, query, args...)
 	if err != nil {
 		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Database error", utils.Logger{
 			LogLevel:    utils.CRITICAL,
@@ -383,7 +487,7 @@ func (ac *ApplicantController) ListNotifications(c *fiber.Ctx) error {
 	}
 	defer rows.Close()
 
-	var notifications []model.AppNotification
+	notifications := []model.AppNotification{}
 	for rows.Next() {
 		var notif model.AppNotification
 		var at time.Time
@@ -401,7 +505,7 @@ func (ac *ApplicantController) ListNotifications(c *fiber.Ctx) error {
 		notifications = append(notifications, notif)
 	}
 
-	return utils.JsonSuccessResponse(c, "Notifications retrieved", notifications)
+	return utils.JsonPaginatedSuccessResponse(c, "Notifications retrieved", notifications, utils.GeneratePaginationData(total, filter.Limit, filter.Page))
 }
 
 // MarkNotificationsRead marks notifications as read

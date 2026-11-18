@@ -1,5 +1,7 @@
 package model
 
+import "time"
+
 type Application struct {
 	ID             string                `json:"id"`
 	Reference      string                `json:"reference"`
@@ -66,6 +68,29 @@ type ListAllResponse struct {
 	Summary      ApplicationSummary `json:"summary"`
 	ByDepartment []DepartmentCount  `json:"by_department"`
 	Trends       []TrendPoint       `json:"trends"`
+}
+
+// ApplicationFilter is the query contract for the application list endpoints
+// (GET /applications and GET /applications/mine). The fields tagged with
+// `field`/`op` are turned into a parameterised WHERE clause by
+// utils.BuildWhereClause. Search performs a cross-column match handled in the
+// controller (plain columns with ILIKE, encrypted-PII columns via their hash).
+type ApplicationFilter struct {
+	Page  int `query:"page"`
+	Limit int `query:"limit"`
+
+	// Search matches reference / department / specialization (ILIKE) and the
+	// applicant full_name_hash / email_hash columns.
+	Search string `query:"search"`
+
+	Reference  string `query:"reference" field:"a.reference" op:"ILIKE" validate:"omitempty,max=100"`
+	Department string `query:"department" field:"a.department" op:"=" validate:"omitempty"`
+	Status     string `query:"status" field:"a.status" op:"=" validate:"omitempty,oneof=submitted under_review shortlisted interview accepted rejected"`
+
+	// Submission date range. Parsed into time.Time in the controller so pgx
+	// binds them as timestamptz; query:"-" keeps Fiber's decoder away from them.
+	SubmittedFrom *time.Time `query:"-" field:"a.submitted_at" op:">="`
+	SubmittedTo   *time.Time `query:"-" field:"a.submitted_at" op:"<="`
 }
 
 type ApplicationDocument struct {

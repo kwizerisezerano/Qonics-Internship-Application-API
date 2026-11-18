@@ -285,6 +285,12 @@
         "Authorization",
         "authorization"
       ],
+      "input_query_strings": [
+        "page",
+        "limit",
+        "search",
+        "read"
+      ],
       "backend": [
         {
           "host": ["http://applicant:9000"],
@@ -334,6 +340,13 @@
         "Accept",
         "Authorization",
         "authorization"
+      ],
+      "input_query_strings": [
+        "page",
+        "limit",
+        "search",
+        "institution",
+        "field_of_study"
       ],
       "backend": [
         {
@@ -410,6 +423,16 @@
         "Authorization",
         "authorization"
       ],
+      "input_query_strings": [
+        "page",
+        "limit",
+        "search",
+        "reference",
+        "department",
+        "status",
+        "submitted_from",
+        "submitted_to"
+      ],
       "backend": [
         {
           "host": ["http://application:9000"],
@@ -434,6 +457,16 @@
         "Accept",
         "Authorization",
         "authorization"
+      ],
+      "input_query_strings": [
+        "page",
+        "limit",
+        "search",
+        "reference",
+        "department",
+        "status",
+        "submitted_from",
+        "submitted_to"
       ],
       "backend": [
         {
