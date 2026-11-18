@@ -748,6 +748,18 @@ paths:
                               type: string
                             count:
                               type: integer
+                      by_specialization:
+                        type: array
+                        description: Application counts per department and specialization.
+                        items:
+                          type: object
+                          properties:
+                            department:
+                              type: string
+                            specialization:
+                              type: string
+                            count:
+                              type: integer
                       trends:
                         type: array
                         items:

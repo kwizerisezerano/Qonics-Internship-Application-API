@@ -54,6 +54,14 @@ type DepartmentCount struct {
 	Count      int    `json:"count"`
 }
 
+// SpecializationCount is the number of applications for a single
+// department + specialization pair.
+type SpecializationCount struct {
+	Department     string `json:"department"`
+	Specialization string `json:"specialization"`
+	Count          int    `json:"count"`
+}
+
 // TrendPoint is the number of applications submitted in a single month.
 type TrendPoint struct {
 	Month string `json:"month"`
@@ -62,12 +70,13 @@ type TrendPoint struct {
 
 // ListAllResponse is the payload for GET /applications (admin): every
 // application plus the dashboard aggregates (status summary, per-department
-// counts and the last six months trend).
+// counts, per-specialization counts and the last twelve months trend).
 type ListAllResponse struct {
-	Applications []Application      `json:"applications"`
-	Summary      ApplicationSummary `json:"summary"`
-	ByDepartment []DepartmentCount  `json:"by_department"`
-	Trends       []TrendPoint       `json:"trends"`
+	Applications     []Application         `json:"applications"`
+	Summary          ApplicationSummary    `json:"summary"`
+	ByDepartment     []DepartmentCount     `json:"by_department"`
+	BySpecialization []SpecializationCount `json:"by_specialization"`
+	Trends           []TrendPoint          `json:"trends"`
 }
 
 // ApplicationFilter is the query contract for the application list endpoints

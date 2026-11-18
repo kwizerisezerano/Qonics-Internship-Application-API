@@ -132,7 +132,16 @@ func (ac *ApplicationController) ListAll(c *fiber.Ctx) error {
 		})
 	}
 
-	trends, err := ac.applicationTrends(ctx, whereClause, params, 6)
+	trends, err := ac.applicationTrends(ctx, whereClause, params, 12)
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch applications", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	bySpecialization, err := ac.applicationsBySpecialization(ctx, whereClause, params)
 	if err != nil {
 		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch applications", utils.Logger{
 			LogLevel:    utils.CRITICAL,
@@ -142,10 +151,11 @@ func (ac *ApplicationController) ListAll(c *fiber.Ctx) error {
 	}
 
 	return utils.JsonPaginatedSuccessResponse(c, "Applications retrieved", model.ListAllResponse{
-		Applications: applications,
-		Summary:      summary,
-		ByDepartment: byDepartment,
-		Trends:       trends,
+		Applications:     applications,
+		Summary:          summary,
+		ByDepartment:     byDepartment,
+		BySpecialization: bySpecialization,
+		Trends:           trends,
 	}, utils.GeneratePaginationData(summary.Total, filter.Limit, filter.Page))
 }
 
@@ -659,6 +669,34 @@ func (ac *ApplicationController) applicationsByDepartment(ctx context.Context, w
 			return nil, err
 		}
 		counts = append(counts, dc)
+	}
+	return counts, nil
+}
+
+// applicationsBySpecialization aggregates the filtered applications by
+// department and specialization, most applications first within each
+// department.
+func (ac *ApplicationController) applicationsBySpecialization(ctx context.Context, whereClause string, params []any) ([]model.SpecializationCount, error) {
+	rows, err := ac.DB.Query(ctx, `
+		SELECT a.department, a.specialization, COUNT(*)
+		FROM applications a
+		JOIN applicant_profiles ap ON a.applicant_id = ap.id
+	`+whereClause+`
+		GROUP BY a.department, a.specialization
+		ORDER BY a.department ASC, COUNT(*) DESC, a.specialization ASC
+	`, params...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := []model.SpecializationCount{}
+	for rows.Next() {
+		var sc model.SpecializationCount
+		if err := rows.Scan(&sc.Department, &sc.Specialization, &sc.Count); err != nil {
+			return nil, err
+		}
+		counts = append(counts, sc)
 	}
 	return counts, nil
 }
