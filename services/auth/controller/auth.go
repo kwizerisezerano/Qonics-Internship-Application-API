@@ -148,8 +148,9 @@ func (ac *AuthController) Register(c *fiber.Ctx) error {
 	welcomeSubject := "Welcome to Qonics Internship Program"
 	welcomeMessage := fmt.Sprintf("Your account has been successfully created, %s. Start your application now!", req.FullName)
 	if err := utils.PublishTemplatedEmailNotification(ctx, ac.Redis, req.Email, welcomeSubject, "user_welcome", map[string]interface{}{
-		"name":  req.FullName,
-		"email": req.Email,
+		"name":      req.FullName,
+		"email":     req.Email,
+		"login_url": ac.Config.WebURL,
 	}); err != nil {
 		// Log warning but don't fail the registration
 		// TODO: Use proper logger when available

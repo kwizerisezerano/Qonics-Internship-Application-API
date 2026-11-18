@@ -13,6 +13,7 @@ import (
 type Config struct {
 	ServiceName  string
 	Port         string
+	WebURL       string
 	Database     DatabaseConfig
 	DatabaseTest DatabaseConfig
 	Redis        RedisConfig
@@ -74,6 +75,7 @@ func LoadConfig(serviceName string) (*Config, error) {
 	viper.SetDefault("email.host", "smtp.gmail.com")
 	viper.SetDefault("email.port", "587")
 	viper.SetDefault("email.from", "noreply@qonics.com")
+	viper.SetDefault("weburl", "http://localhost:3000/auth/login")
 
 	// Read from config file if exists
 	viper.ReadInConfig()
@@ -112,6 +114,7 @@ func LoadConfig(serviceName string) (*Config, error) {
 	config := &Config{
 		ServiceName: serviceName,
 		Port:        viper.GetString("port"),
+		WebURL:      viper.GetString("weburl"),
 		Database: DatabaseConfig{
 			Host:     viper.GetString("database.host"),
 			Port:     viper.GetString("database.port"),
