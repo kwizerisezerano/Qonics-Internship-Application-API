@@ -274,14 +274,12 @@ func (ac *AuthController) Login(c *fiber.Ctx) error {
 
 // Logout handles user logout
 func (ac *AuthController) Logout(c *fiber.Ctx) error {
-	userID := c.Locals("user_id")
-
 	// Clear auth cookies
 	utils.ClearAuthCookies(c)
 
 	// Log successful logout
-	if userID != nil {
-		utils.RecordSuccessActivityLog(c, ac.DB, userID.(int), "USER_LOGOUT", "User logged out successfully", nil)
+	if userID := utils.CurrentUserID(c); userID > 0 {
+		utils.RecordSuccessActivityLog(c, ac.DB, userID, "USER_LOGOUT", "User logged out successfully", nil)
 	}
 
 	return utils.JsonSuccessResponse(c, "Logout successful", nil)

@@ -99,6 +99,11 @@ func (fc *FileController) GetPresignedURL(c *fiber.Ctx) error {
 		})
 	}
 
+	// Record the upload request in the audit trail (leazi-style activity log).
+	utils.RecordSuccessActivityLog(c, fc.DB, utils.CurrentUserID(c), "FILE_PRESIGNED_URL",
+		fmt.Sprintf("Requested upload URL for %s", request.FileName),
+		map[string]any{"file_id": fileID, "file_name": request.FileName})
+
 	// Return presigned URL and temporary file ID
 	return c.JSON(fiber.Map{
 		"status":  fiber.StatusOK,
@@ -226,6 +231,11 @@ func (fc *FileController) ConfirmFileUpload(c *fiber.Ctx) error {
 	if err != nil {
 		file.URL = ""
 	}
+
+	// Record the confirmation in the audit trail (leazi-style activity log).
+	utils.RecordSuccessActivityLog(c, fc.DB, utils.CurrentUserID(c), "FILE_CONFIRM_UPLOAD",
+		fmt.Sprintf("Confirmed upload of file %s", file.ID),
+		map[string]any{"file_id": file.ID, "source_table": file.SourceTable})
 
 	return utils.JsonSuccessResponse(c, "Upload confirmed", file)
 }

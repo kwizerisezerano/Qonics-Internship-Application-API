@@ -91,6 +91,9 @@ func init() {
 	admin := applicantTestApp.Group("/api/v1/applicants", auth, middleware.AdminMiddleware())
 	admin.Get("/", controller.ListApplicants)
 
+	activityLogs := applicantTestApp.Group("/api/v1/activity-logs", auth, middleware.AdminMiddleware())
+	activityLogs.Get("/", controller.ListActivityLogs)
+
 	settings := applicantTestApp.Group("/api/v1/settings", auth, middleware.AdminMiddleware())
 	settings.Get("/", controller.GetSettings)
 	settings.Put("/", controller.SaveSettings)
@@ -224,6 +227,27 @@ func seedApplicant(t *testing.T) seededApplicant {
 	require.NoError(t, err)
 
 	return seededApplicant{UserID: userID, Name: name, Email: email, Phone: phone}
+}
+
+// seedActivityLog inserts an audit-trail row for the given user and returns its
+// id, so the admin activity-logs endpoint can be exercised against real data.
+// The row is removed when the test finishes.
+func seedActivityLog(t *testing.T, userID int, activityType, status, description string) int {
+	t.Helper()
+	ctx := context.Background()
+
+	var id int
+	err := applicantTestDB.QueryRow(ctx, `
+		INSERT INTO activity_logs (user_id, activity_type, status, description, ip_address, user_agent)
+		VALUES ($1, $2, $3, $4, '127.0.0.1', 'applicant-test')
+		RETURNING id
+	`, userID, activityType, status, description).Scan(&id)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		applicantTestDB.Exec(context.Background(), "DELETE FROM activity_logs WHERE id = $1", id)
+	})
+	return id
 }
 
 // profilePayload returns a full profile body that exactly matches what
@@ -722,6 +746,73 @@ func TestSaveSettingsRoute(t *testing.T) {
 	}
 }
 
+// TestListActivityLogsRoute covers GET /api/v1/activity-logs/ (admin only).
+func TestListActivityLogsRoute(t *testing.T) {
+	seeded := seedApplicant(t)
+	seedActivityLog(t, seeded.UserID, "PROFILE_UPDATE", "success", "Updated applicant profile")
+	seedActivityLog(t, seeded.UserID, "USER_LOGIN", "success", "User logged in successfully")
+
+	tests := []struct {
+		name       string
+		headers    map[string]string
+		path       string
+		wantStatus int
+		check      func(t *testing.T, body map[string]any)
+	}{
+		{
+			name:       "unauthorized - missing token",
+			headers:    nil,
+			path:       "/api/v1/activity-logs/",
+			wantStatus: fiber.StatusUnauthorized,
+		},
+		{
+			name:       "forbidden - applicant role",
+			headers:    authHeaders(1, "applicant"),
+			path:       "/api/v1/activity-logs/",
+			wantStatus: fiber.StatusForbidden,
+		},
+		{
+			name:       "success - admin lists activity logs",
+			headers:    authHeaders(1, "admin"),
+			path:       "/api/v1/activity-logs/",
+			wantStatus: fiber.StatusOK,
+			check: func(t *testing.T, body map[string]any) {
+				_, ok := body["data"].([]any)
+				assert.True(t, ok, "response should have data array: %v", body)
+				assert.NotNil(t, body["meta"], "response should carry pagination meta: %v", body)
+			},
+		},
+		{
+			name:       "success - filter by activity type and status",
+			headers:    authHeaders(1, "admin"),
+			path:       "/api/v1/activity-logs/?activity_type=PROFILE_UPDATE&status=success",
+			wantStatus: fiber.StatusOK,
+		},
+		{
+			name:       "success - search by description",
+			headers:    authHeaders(1, "admin"),
+			path:       "/api/v1/activity-logs/?search=profile",
+			wantStatus: fiber.StatusOK,
+		},
+		{
+			name:       "bad request - invalid status value",
+			headers:    authHeaders(1, "admin"),
+			path:       "/api/v1/activity-logs/?status=nope",
+			wantStatus: fiber.StatusBadRequest,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			status, body := doJSON(t, "GET", test.path, nil, test.headers)
+			assert.Equal(t, test.wantStatus, status)
+			if test.check != nil {
+				test.check(t, body)
+			}
+		})
+	}
+}
+
 // TestUnauthorizedAccess asserts every protected route rejects callers without a
 // token (leazi-style single table over the whole surface).
 func TestUnauthorizedAccess(t *testing.T) {
@@ -734,6 +825,7 @@ func TestUnauthorizedAccess(t *testing.T) {
 		{"GET", "/api/v1/applicant/notifications"},
 		{"POST", "/api/v1/applicant/notifications/read"},
 		{"GET", "/api/v1/applicants/"},
+		{"GET", "/api/v1/activity-logs/"},
 		{"GET", "/api/v1/settings/"},
 		{"PUT", "/api/v1/settings/"},
 	}

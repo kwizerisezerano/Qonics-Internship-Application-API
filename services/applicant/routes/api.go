@@ -25,6 +25,13 @@ func SetupRoutes(app *fiber.App, applicantController *controller.ApplicantContro
 
 	admin.Get("/", applicantController.ListApplicants)
 
+	// Activity logs (admin)
+	activityLogs := api.Group("/activity-logs")
+	activityLogs.Use(middleware.AuthMiddleware(jwtSecret))
+	activityLogs.Use(middleware.AdminMiddleware())
+
+	activityLogs.Get("/", applicantController.ListActivityLogs)
+
 	// Settings routes (admin)
 	settings := api.Group("/settings")
 	settings.Use(middleware.AuthMiddleware(jwtSecret))

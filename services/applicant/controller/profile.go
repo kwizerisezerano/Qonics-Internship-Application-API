@@ -275,6 +275,9 @@ func (ac *ApplicantController) SaveProfile(c *fiber.Ctx) error {
 		})
 	}
 
+	// Record the profile change in the audit trail (leazi-style activity log).
+	utils.RecordSuccessActivityLog(c, ac.DB, userIDInt, "PROFILE_UPDATE", "Updated applicant profile", nil)
+
 	return utils.JsonSuccessResponse(c, "Profile updated", req)
 }
 
@@ -586,6 +589,10 @@ func (ac *ApplicantController) MarkNotificationsRead(c *fiber.Ctx) error {
 		})
 	}
 
+	// Record the read action in the audit trail (leazi-style activity log).
+	utils.RecordSuccessActivityLog(c, ac.DB, userIDInt, "NOTIFICATIONS_READ",
+		fmt.Sprintf("Marked %d notification(s) as read", len(req.IDs)), nil)
+
 	return utils.JsonSuccessResponse(c, "Notifications marked as read", nil)
 }
 
@@ -692,5 +699,129 @@ func (ac *ApplicantController) SaveSettings(c *fiber.Ctx) error {
 		})
 	}
 
+	// Record the settings change in the audit trail (leazi-style activity log).
+	utils.RecordSuccessActivityLog(c, ac.DB, utils.CurrentUserID(c), "SETTINGS_UPDATE",
+		fmt.Sprintf("Updated application settings (applications_open=%t)", req.ApplicationsOpen), nil)
+
 	return utils.JsonSuccessResponse(c, "Settings updated", req)
+}
+
+// ListActivityLogs returns the audit trail (admin only) following the leazi
+// list pattern: the tagged query fields are turned into a parameterised WHERE
+// clause by utils.BuildWhereClause, Search is a cross-column match handled here,
+// and the list is returned with the standard pagination envelope.
+func (ac *ApplicantController) ListActivityLogs(c *fiber.Ctx) error {
+	ctx := context.Background()
+
+	filter := model.ActivityLogFilter{}
+	if err := c.QueryParser(&filter); err != nil {
+		// Known error - invalid query parameters, no logging
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
+	}
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.Limit < 1 {
+		filter.Limit = 10
+	}
+	if filter.Limit > 100 {
+		filter.Limit = 100
+	}
+
+	whereClause, _, params, err := utils.BuildWhereClause(&filter)
+	if err != nil {
+		// Known error - invalid filter, no logging
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	// Cross-column search: description via ILIKE, actor PII via their hash.
+	whereClause, params = utils.AppendSearchClause(whereClause, params,
+		[]string{"al.description"},
+		[]string{"u.full_name_hash", "u.email_hash"},
+		filter.Search,
+	)
+
+	// Total count, independent of the current page.
+	var total int
+	err = ac.DB.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM activity_logs al
+		LEFT JOIN users u ON al.user_id = u.id
+	`+whereClause, params...).Scan(&total)
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Database error", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	query := `
+		SELECT al.id, al.activity_type, al.status, al.description,
+		       al.user_id, COALESCE(al.ip_address, ''), COALESCE(al.user_agent, ''),
+		       COALESCE(al.extra::text, ''), al.created_at,
+		       u.full_name_encrypted, u.email_encrypted, COALESCE(u.role, '')
+		FROM activity_logs al
+		LEFT JOIN users u ON al.user_id = u.id
+	` + whereClause + `
+		ORDER BY al.created_at DESC
+	` + fmt.Sprintf(" LIMIT $%d OFFSET $%d", len(params)+1, len(params)+2)
+
+	args := append(append([]any{}, params...), filter.Limit, (filter.Page-1)*filter.Limit)
+
+	rows, err := ac.DB.Query(ctx, query, args...)
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Database error", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+	defer rows.Close()
+
+	logs := []model.ActivityLog{}
+	for rows.Next() {
+		var entry model.ActivityLog
+		var userID *int
+		var fullNameEncrypted, emailEncrypted []byte
+		var createdAt time.Time
+
+		err := rows.Scan(
+			&entry.ID, &entry.ActivityType, &entry.Status, &entry.Description,
+			&userID, &entry.IPAddress, &entry.UserAgent, &entry.Extra, &createdAt,
+			&fullNameEncrypted, &emailEncrypted, &entry.Role,
+		)
+		if err != nil {
+			return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Error scanning row", utils.Logger{
+				LogLevel:    utils.CRITICAL,
+				Message:     err.Error(),
+				ServiceName: ac.Config.ServiceName,
+			})
+		}
+
+		entry.CreatedAt = createdAt.Format(time.RFC3339)
+
+		// Attach the actor's decrypted identity when the user still exists.
+		if userID != nil {
+			entry.UserID = userID
+			if len(fullNameEncrypted) > 0 {
+				entry.Username, _ = utils.DecryptData(ctx, ac.DB, fullNameEncrypted)
+			}
+			if len(emailEncrypted) > 0 {
+				entry.Email, _ = utils.DecryptData(ctx, ac.DB, emailEncrypted)
+			}
+		}
+
+		logs = append(logs, entry)
+	}
+
+	if err := rows.Err(); err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Database error", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	return utils.JsonPaginatedSuccessResponse(c, "Activity logs retrieved", logs, utils.GeneratePaginationData(total, filter.Limit, filter.Page))
 }

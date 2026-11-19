@@ -80,3 +80,53 @@ type NotificationFilter struct {
 	// UserID scopes the list to the caller; set in the controller.
 	UserID int `query:"-" field:"n.user_id" op:"="`
 }
+
+// ActivityLog is a single audit-trail entry returned by GET /activity-logs.
+// The username and email are decrypted from the owning user's PII columns.
+type ActivityLog struct {
+	ID           int64  `json:"id"`
+	ActivityType string `json:"activity_type"`
+	Status       string `json:"status"`
+	Description  string `json:"description"`
+	UserID       *int   `json:"user_id,omitempty"`
+	Username     string `json:"username,omitempty"`
+	Email        string `json:"email,omitempty"`
+	Role         string `json:"role,omitempty"`
+	IPAddress    string `json:"ip_address,omitempty"`
+	UserAgent    string `json:"user_agent,omitempty"`
+	Extra        string `json:"extra,omitempty"`
+	CreatedAt    string `json:"created_at"`
+}
+
+// ActivityLogFilter is the query contract for GET /activity-logs (admin). It
+// mirrors leazi's filter: dynamic `field`/`op` tags are turned into a
+// parameterised WHERE clause by utils.BuildWhereClause, while Search is a
+// cross-column match handled in the controller (description via ILIKE and the
+// user PII columns via their SHA-256 hash).
+type ActivityLogFilter struct {
+	Page  int `query:"page"`
+	Limit int `query:"limit"`
+
+	// Activity type filters.
+	ActivityType           string `query:"activity_type" field:"al.activity_type" op:"=" validate:"omitempty,max=100"`
+	ActivityTypeNeq        string `query:"activity_type_neq" field:"al.activity_type" op:"!=" validate:"omitempty,max=100"`
+	ActivityTypeContains   string `query:"activity_type_c" field:"al.activity_type" op:"ILIKE" validate:"omitempty,min=2,max=100"`
+	ActivityTypeStartsWith string `query:"activity_type_sw" field:"al.activity_type" op:"LIKE" validate:"omitempty,min=1,max=100"`
+	ActivityTypeEndsWith   string `query:"activity_type_ew" field:"al.activity_type" op:"LIKE" validate:"omitempty,min=1,max=100"`
+
+	// Status filters.
+	Status    string `query:"status" field:"al.status" op:"=" validate:"omitempty,oneof=success failure"`
+	StatusNeq string `query:"status_neq" field:"al.status" op:"!=" validate:"omitempty,oneof=success failure"`
+
+	// Actor filters (user_id on the log, role from the joined user).
+	UserID *int   `query:"user_id" field:"al.user_id" op:"="`
+	Role   string `query:"role" field:"u.role" op:"=" validate:"omitempty,oneof=applicant admin"`
+
+	// Date range filters.
+	CreatedAt     string `query:"created_at" field:"al.created_at" op:"=" validate:"omitempty"`
+	CreatedAfter  string `query:"created_after" field:"al.created_at" op:">=" validate:"omitempty"`
+	CreatedBefore string `query:"created_before" field:"al.created_at" op:"<=" validate:"omitempty"`
+
+	// Search matches the description (ILIKE) and the user name/email hashes.
+	Search string `query:"search"`
+}

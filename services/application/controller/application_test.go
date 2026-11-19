@@ -63,6 +63,17 @@ func init() {
 	}
 	applicationTestDB = db
 
+	// Deterministic settings row so the intake-gate tests start from an open
+	// window regardless of any state left behind by other suites sharing the
+	// test database.
+	if _, err := db.Exec(context.Background(), `
+		INSERT INTO settings (id, applications_open, close_on, closure_message)
+		VALUES (1, TRUE, NULL, '')
+		ON CONFLICT (id) DO UPDATE SET applications_open = TRUE, close_on = NULL, closure_message = ''
+	`); err != nil {
+		panic("Failed to reset settings: " + err.Error())
+	}
+
 	controller := NewApplicationController(db, cfg, cfg.InitRedis())
 
 	applicationTestApp = fiber.New(fiber.Config{AppName: "application-service-test"})

@@ -362,6 +362,16 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		})
 	}
 
+	// Record the submission in the audit trail (leazi-style activity log).
+	utils.RecordSuccessActivityLog(c, ac.DB, userIDInt, "APPLICATION_SUBMIT",
+		fmt.Sprintf("Submitted application %s for %s - %s", reference, req.Department, req.Specialization),
+		map[string]any{
+			"application_id": appID,
+			"reference":      reference,
+			"department":     req.Department,
+			"specialization": req.Specialization,
+		})
+
 	// Notify the applicant over both channels (in-app + email) and fan out to
 	// every admin. Notification failures must never fail the submission, so they
 	// are logged only. Emails are rendered from HTML templates (leazi pattern).
@@ -493,6 +503,14 @@ func (ac *ApplicationController) UpdateStatus(c *fiber.Ctx) error {
 		})
 	}
 
+	// Record the status transition in the audit trail (leazi-style activity log).
+	utils.RecordSuccessActivityLog(c, ac.DB, utils.CurrentUserID(c), "APPLICATION_STATUS_UPDATE",
+		fmt.Sprintf("Updated application %s status to %s", id, utils.HumanizeStatus(req.Status)),
+		map[string]any{
+			"application_id": id,
+			"status":         req.Status,
+		})
+
 	// Get user_id for notification
 	var applicantUserID int
 	var reference string
@@ -620,6 +638,14 @@ func (ac *ApplicationController) AddNote(c *fiber.Ctx) error {
 			ServiceName: ac.Config.ServiceName,
 		})
 	}
+
+	// Record the note in the audit trail (leazi-style activity log).
+	utils.RecordSuccessActivityLog(c, ac.DB, utils.CurrentUserID(c), "REVIEW_NOTE_ADD",
+		fmt.Sprintf("Added a review note to application %s", id),
+		map[string]any{
+			"application_id": id,
+			"note_id":        noteID,
+		})
 
 	// Fetch updated application
 	applications, err := ac.fetchApplications(ctx, "", id)

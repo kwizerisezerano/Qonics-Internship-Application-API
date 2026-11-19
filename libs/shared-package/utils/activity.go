@@ -105,3 +105,19 @@ func RecordFailedActivityLog(c *fiber.Ctx, db *pgxpool.Pool, userId int, activit
 		extra,
 	)
 }
+
+// CurrentUserID returns the authenticated user id stored on the request by the
+// auth middleware. JWT numeric claims decode to float64, so float64, int64 and
+// int are all handled uniformly; it returns 0 when the caller is unauthenticated.
+func CurrentUserID(c *fiber.Ctx) int {
+	switch v := c.Locals("user_id").(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	default:
+		return 0
+	}
+}
