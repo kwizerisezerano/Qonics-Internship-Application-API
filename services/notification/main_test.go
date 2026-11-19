@@ -7,9 +7,11 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qonics/qonics-appy-api/libs/shared-package/config"
 	"github.com/qonics/qonics-appy-api/libs/shared-package/utils"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -24,13 +26,13 @@ func TestGenerateHtmlTemplate(t *testing.T) {
 	tests := []struct {
 		name        string
 		template    string
-		data        map[string]interface{}
+		data        map[string]any
 		wantContain []string
 	}{
 		{
 			name:     "application submitted",
 			template: "application_submitted",
-			data: map[string]interface{}{
+			data: map[string]any{
 				"name":           "Alice",
 				"reference":      "APP-123",
 				"department":     "software",
@@ -42,7 +44,7 @@ func TestGenerateHtmlTemplate(t *testing.T) {
 		{
 			name:     "status updated",
 			template: "application_status_updated",
-			data: map[string]interface{}{
+			data: map[string]any{
 				"name":         "Bob",
 				"reference":    "APP-456",
 				"status":       "Interview",
@@ -55,7 +57,7 @@ func TestGenerateHtmlTemplate(t *testing.T) {
 		{
 			name:     "admin new application",
 			template: "admin_new_application",
-			data: map[string]interface{}{
+			data: map[string]any{
 				"applicant_name": "Carol",
 				"reference":      "APP-789",
 				"department":     "iot",
@@ -67,7 +69,7 @@ func TestGenerateHtmlTemplate(t *testing.T) {
 		{
 			name:     "user welcome",
 			template: "user_welcome",
-			data: map[string]interface{}{
+			data: map[string]any{
 				"name":      "Dave",
 				"email":     "dave@example.com",
 				"login_url": "https://app.qonics.com/login",
@@ -189,4 +191,55 @@ func TestNotificationWorkerInit(t *testing.T) {
 	err = db.QueryRow(ctx, "SELECT 1").Scan(&result)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result)
+}
+
+func TestMaskRecipient(t *testing.T) {
+	assert.Equal(t, "j***@example.com", maskRecipient("jane.doe@example.com"))
+	assert.Equal(t, "a***@x.io", maskRecipient("a@x.io"))
+	assert.Equal(t, "42", maskRecipient("42"), "user ids are not masked")
+	assert.Equal(t, "", maskRecipient(""))
+}
+
+func TestRetryDelay(t *testing.T) {
+	assert.Equal(t, 30*time.Second, retryDelay(1))
+	assert.Equal(t, 60*time.Second, retryDelay(2))
+}
+
+// TestRetryQueue covers scheduling a failed job and moving it back onto the
+// main queue once due. It uses Redis logical database 15, never the live one.
+func TestRetryQueue(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379", DB: 15})
+	defer rdb.Close()
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		t.Skipf("redis not available: %v", err)
+	}
+	rdb.Del(ctx, retryQueue, notificationQueue)
+	t.Cleanup(func() { rdb.Del(ctx, retryQueue, notificationQueue) })
+
+	event := &NotificationEvent{Channel: "EMAIL", RecipientID: "a@example.com", Subject: "Hi"}
+
+	retrying, err := scheduleRetry(ctx, rdb, event)
+	require.NoError(t, err)
+	assert.True(t, retrying, "first failure should be retried")
+	assert.Equal(t, 1, event.Attempts)
+
+	// Not due yet: nothing moves.
+	promoteDueRetries(ctx, rdb)
+	assert.Equal(t, int64(0), rdb.LLen(ctx, notificationQueue).Val())
+
+	// Make it due, then it moves back to the main queue exactly once.
+	members := rdb.ZRange(ctx, retryQueue, 0, -1).Val()
+	require.Len(t, members, 1)
+	rdb.ZAdd(ctx, retryQueue, redis.Z{Score: 0, Member: members[0]})
+	promoteDueRetries(ctx, rdb)
+	promoteDueRetries(ctx, rdb)
+	assert.Equal(t, int64(1), rdb.LLen(ctx, notificationQueue).Val())
+	assert.Equal(t, int64(0), rdb.ZCard(ctx, retryQueue).Val())
+
+	// The last allowed failure gives up instead of scheduling another retry.
+	event.Attempts = maxAttempts - 1
+	retrying, err = scheduleRetry(ctx, rdb, event)
+	require.NoError(t, err)
+	assert.False(t, retrying)
 }

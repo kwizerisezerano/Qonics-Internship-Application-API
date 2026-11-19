@@ -27,10 +27,8 @@ func NewApplicantController(db *pgxpool.Pool, cfg *config.Config) *ApplicantCont
 
 // GetProfile returns the current user's profile
 func (ac *ApplicantController) GetProfile(c *fiber.Ctx) error {
-	userID := c.Locals("user_id")
-
-	// Check if user is authenticated
-	if userID == nil {
+	user, ok := utils.GetUserPayload(c)
+	if !ok {
 		return utils.JsonErrorResponse(c, fiber.StatusUnauthorized, "Unauthorized")
 	}
 
@@ -39,8 +37,7 @@ func (ac *ApplicantController) GetProfile(c *fiber.Ctx) error {
 	var profile model.ApplicantProfile
 	var fullNameEncrypted, emailEncrypted, phoneEncrypted []byte
 
-	// Convert userID to int for database query
-	userIDInt := int(userID.(float64))
+	userIDInt := user.ID
 
 	err := ac.DB.QueryRow(ctx, `
 		SELECT id, full_name_encrypted, email_encrypted, phone_encrypted,
@@ -103,10 +100,8 @@ func (ac *ApplicantController) GetProfile(c *fiber.Ctx) error {
 
 // SaveProfile updates the current user's profile
 func (ac *ApplicantController) SaveProfile(c *fiber.Ctx) error {
-	userID := c.Locals("user_id")
-
-	// Check if user is authenticated
-	if userID == nil {
+	user, ok := utils.GetUserPayload(c)
+	if !ok {
 		return utils.JsonErrorResponse(c, fiber.StatusUnauthorized, "Unauthorized")
 	}
 
@@ -124,8 +119,7 @@ func (ac *ApplicantController) SaveProfile(c *fiber.Ctx) error {
 
 	ctx := context.Background()
 
-	// Convert userID to int for database query
-	userIDInt := int(userID.(float64))
+	userIDInt := user.ID
 
 	// Get existing profile to check for changes
 	var existingFullNameEncrypted, existingEmailEncrypted, existingPhoneEncrypted []byte
@@ -165,13 +159,22 @@ func (ac *ApplicantController) SaveProfile(c *fiber.Ctx) error {
 
 	// Decrypt existing PII for comparison
 	existingFullName, _ := utils.DecryptData(ctx, ac.DB, existingFullNameEncrypted)
-	existingEmail, _ := utils.DecryptData(ctx, ac.DB, existingEmailEncrypted)
 	existingPhone, _ := utils.DecryptData(ctx, ac.DB, existingPhoneEncrypted)
+
+	// The profile email is the account (login) email and cannot be changed here:
+	// notifications are sent to it, so it must stay the verified address. A name
+	// or phone left out of the request keeps its saved value instead of being
+	// blanked.
+	if req.FullName == "" {
+		req.FullName = existingFullName
+	}
+	if req.Phone == "" {
+		req.Phone = existingPhone
+	}
 
 	// Check if any field is actually changing
 	changed := false
 	if existingFullName != req.FullName ||
-		existingEmail != req.Email ||
 		existingPhone != req.Phone ||
 		existingCountry != req.Country ||
 		existingCity != req.City ||
@@ -230,15 +233,6 @@ func (ac *ApplicantController) SaveProfile(c *fiber.Ctx) error {
 		})
 	}
 
-	emailEncrypted, emailHash, err := utils.EncryptAndHash(ctx, ac.DB, req.Email)
-	if err != nil {
-		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to encrypt data", utils.Logger{
-			LogLevel:    utils.CRITICAL,
-			Message:     err.Error(),
-			ServiceName: ac.Config.ServiceName,
-		})
-	}
-
 	phoneEncrypted, phoneHash, err := utils.EncryptAndHash(ctx, ac.DB, req.Phone)
 	if err != nil {
 		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to encrypt data", utils.Logger{
@@ -252,16 +246,15 @@ func (ac *ApplicantController) SaveProfile(c *fiber.Ctx) error {
 	_, err = ac.DB.Exec(ctx, `
 		UPDATE applicant_profiles
 		SET full_name_encrypted = $1, full_name_hash = $2,
-		    email_encrypted = $3, email_hash = $4,
-		    phone_encrypted = $5, phone_hash = $6,
-		    country = NULLIF($7, ''), city = NULLIF($8, ''), institution = NULLIF($9, ''),
-		    field_of_study = NULLIF($10, ''), qualification = NULLIF($11, ''),
-		    academic_status = NULLIF($12, ''), graduation_year = $13,
-		    skills = $14, bio = NULLIF($15, ''),
-		    github_url = NULLIF($16, ''), linkedin_url = NULLIF($17, ''), portfolio_url = NULLIF($18, ''),
+		    phone_encrypted = $3, phone_hash = $4,
+		    country = NULLIF($5, ''), city = NULLIF($6, ''), institution = NULLIF($7, ''),
+		    field_of_study = NULLIF($8, ''), qualification = NULLIF($9, ''),
+		    academic_status = NULLIF($10, ''), graduation_year = $11,
+		    skills = $12, bio = NULLIF($13, ''),
+		    github_url = NULLIF($14, ''), linkedin_url = NULLIF($15, ''), portfolio_url = NULLIF($16, ''),
 		    updated_at = NOW()
-		WHERE user_id = $19
-	`, fullNameEncrypted, fullNameHash, emailEncrypted, emailHash,
+		WHERE user_id = $17
+	`, fullNameEncrypted, fullNameHash,
 		phoneEncrypted, phoneHash, req.Country, req.City, req.Institution,
 		req.FieldOfStudy, req.Qualification, req.AcademicStatus,
 		req.GraduationYear, req.Skills, req.Bio,
@@ -315,7 +308,7 @@ func (ac *ApplicantController) ListApplicants(c *fiber.Ctx) error {
 	// Total count, independent of the current page.
 	var total int
 	err = ac.DB.QueryRow(ctx, `
-		SELECT COUNT(*)
+		SELECT COUNT(ap.id)
 		FROM applicant_profiles ap
 	`+whereClause, params...).Scan(&total)
 	if err != nil {
@@ -421,17 +414,14 @@ func (ac *ApplicantController) ListApplicants(c *fiber.Ctx) error {
 
 // ListNotifications returns notifications for the current user
 func (ac *ApplicantController) ListNotifications(c *fiber.Ctx) error {
-	userID := c.Locals("user_id")
-
-	// Check if user is authenticated
-	if userID == nil {
+	user, ok := utils.GetUserPayload(c)
+	if !ok {
 		return utils.JsonErrorResponse(c, fiber.StatusUnauthorized, "Unauthorized")
 	}
 
 	ctx := context.Background()
 
-	// Convert userID to int for database query
-	userIDInt := int(userID.(float64))
+	userIDInt := user.ID
 
 	filter := model.NotificationFilter{}
 	if err := c.QueryParser(&filter); err != nil {
@@ -465,7 +455,7 @@ func (ac *ApplicantController) ListNotifications(c *fiber.Ctx) error {
 	// Total count, independent of the current page.
 	var total int
 	err = ac.DB.QueryRow(ctx, `
-		SELECT COUNT(*)
+		SELECT COUNT(n.id)
 		FROM notifications n
 	`+whereClause, params...).Scan(&total)
 	if err != nil {
@@ -518,7 +508,10 @@ func (ac *ApplicantController) ListNotifications(c *fiber.Ctx) error {
 
 // MarkNotificationsRead marks notifications as read
 func (ac *ApplicantController) MarkNotificationsRead(c *fiber.Ctx) error {
-	userID := c.Locals("user_id")
+	user, ok := utils.GetUserPayload(c)
+	if !ok {
+		return utils.JsonErrorResponse(c, fiber.StatusUnauthorized, "Unauthorized")
+	}
 	var req model.MarkNotificationsReadRequest
 
 	if err := c.BodyParser(&req); err != nil {
@@ -533,8 +526,7 @@ func (ac *ApplicantController) MarkNotificationsRead(c *fiber.Ctx) error {
 
 	ctx := context.Background()
 
-	// Convert userID to int for database query
-	userIDInt := int(userID.(float64))
+	userIDInt := user.ID
 
 	// Check if notification IDs belong to the user (foreign key validation)
 	var count int
@@ -744,7 +736,7 @@ func (ac *ApplicantController) ListActivityLogs(c *fiber.Ctx) error {
 	// Total count, independent of the current page.
 	var total int
 	err = ac.DB.QueryRow(ctx, `
-		SELECT COUNT(*)
+		SELECT COUNT(al.id)
 		FROM activity_logs al
 		LEFT JOIN users u ON al.user_id = u.id
 	`+whereClause, params...).Scan(&total)
@@ -824,4 +816,26 @@ func (ac *ApplicantController) ListActivityLogs(c *fiber.Ctx) error {
 	}
 
 	return utils.JsonPaginatedSuccessResponse(c, "Activity logs retrieved", logs, utils.GeneratePaginationData(total, filter.Limit, filter.Page))
+}
+
+// GetPublicSettings returns whether applications are currently being accepted
+// (no login required) so the site can tell applicants before they start a form.
+// applications_open is the effective state: it is false once close_on passes,
+// matching the check the application service enforces on submit. A missing
+// settings row means applications are open.
+func (ac *ApplicantController) GetPublicSettings(c *fiber.Ctx) error {
+	intake, err := utils.GetIntakeStatus(context.Background(), ac.DB)
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Database error", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	settings := model.AppSettings{ApplicationsOpen: intake.Open, ClosureMessage: intake.Message}
+	if intake.CloseOn != nil {
+		settings.CloseOn = intake.CloseOn.Format(time.RFC3339)
+	}
+	return utils.JsonSuccessResponse(c, "Settings retrieved", settings)
 }

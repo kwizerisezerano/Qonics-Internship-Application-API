@@ -54,11 +54,25 @@ type Application struct {
 	Notes          []ReviewNote          `json:"notes"`
 }
 
+// ApplicantSummary is the applicant's profile as embedded in an application,
+// so reviewers see academic background and links alongside the application.
 type ApplicantSummary struct {
-	ID       string `json:"id"`
-	FullName string `json:"full_name"`
-	Email    string `json:"email"`
-	Phone    string `json:"phone"`
+	ID             string   `json:"id"`
+	FullName       string   `json:"full_name"`
+	Email          string   `json:"email"`
+	Phone          string   `json:"phone"`
+	Country        string   `json:"country"`
+	City           string   `json:"city"`
+	Institution    string   `json:"institution"`
+	FieldOfStudy   string   `json:"field_of_study"`
+	Qualification  string   `json:"qualification"`
+	AcademicStatus string   `json:"academic_status"`
+	GraduationYear *int     `json:"graduation_year"`
+	Skills         []string `json:"skills"`
+	Bio            string   `json:"bio"`
+	GithubURL      string   `json:"github_url"`
+	LinkedinURL    string   `json:"linkedin_url"`
+	PortfolioURL   string   `json:"portfolio_url"`
 }
 
 // ApplicationSummary is the count-by-status breakdown of a set of applications.
@@ -183,4 +197,41 @@ type Booking struct {
 	EndDate        string `json:"end_date"`
 	Session        string `json:"session"`
 	AvailableSeats int    `json:"available_seats"`
+}
+
+// SessionCapacity is how many on-site/hybrid interns one daily session holds at
+// the same time. It must match SESSION_CAPACITY in the web app
+// (app/utils/sessions.ts), which promises applicants "6 seats per session".
+const SessionCapacity = 6
+
+// UsesSeat reports whether a work mode occupies a seat in a daily session
+// (remote interns don't).
+func UsesSeat(workMode string) bool {
+	return workMode == "onsite" || workMode == "hybrid"
+}
+
+// displayNames maps department and specialization ids to the names people see
+// (kept in sync with the frontend DEPARTMENTS config).
+var displayNames = map[string]string{
+	"software":      "Software Development",
+	"iot":           "Internet of Things",
+	"frontend":      "Frontend Development",
+	"backend":       "Backend Development",
+	"fullstack":     "Full-Stack Development",
+	"mobile":        "Mobile Development",
+	"database":      "Database Development",
+	"embedded":      "Embedded Systems",
+	"arduino-esp32": "Arduino and ESP32",
+	"sensors":       "Sensors and Electronics",
+	"iot-apps":      "IoT Application Development",
+	"smart-systems": "Smart Systems",
+}
+
+// DisplayName returns the human-readable name for a department or
+// specialization id, falling back to the id itself when it is unknown.
+func DisplayName(id string) string {
+	if name, ok := displayNames[id]; ok {
+		return name
+	}
+	return id
 }

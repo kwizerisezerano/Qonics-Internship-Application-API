@@ -635,3 +635,43 @@ func TestUnauthorizedAccess(t *testing.T) {
 		})
 	}
 }
+
+// TestEmailIsCaseInsensitive: an email registered in any case logs in in any
+// case, and the same address in a different case can't register twice.
+func TestEmailIsCaseInsensitive(t *testing.T) {
+	email := uniqueEmail("MixedCase")
+	upper := strings.ToUpper(email)
+
+	status, body := doJSON(t, "POST", "/api/v1/auth/register", map[string]any{
+		"full_name": uniqueName("Case User"),
+		"email":     "  " + upper + " ",
+		"phone":     "+250788123456",
+		"password":  testPassword,
+	}, nil)
+	require.Equal(t, 200, status, "register failed: %v", body)
+
+	status, body = doJSON(t, "POST", "/api/v1/auth/login", map[string]any{"email": strings.ToLower(email), "password": testPassword}, nil)
+	assert.Equal(t, 200, status, "lowercase login should work: %v", body)
+
+	status, body = doJSON(t, "POST", "/api/v1/auth/register", map[string]any{
+		"full_name": uniqueName("Case User"),
+		"email":     strings.ToLower(email),
+		"phone":     "+250788123456",
+		"password":  testPassword,
+	}, nil)
+	assert.Equal(t, 409, status, "same email in another case is a duplicate: %v", body)
+}
+
+// TestSameNameCanRegisterTwice: two different people may share a full name.
+func TestSameNameCanRegisterTwice(t *testing.T) {
+	name := uniqueName("Shared Name")
+	for i := 0; i < 2; i++ {
+		status, body := doJSON(t, "POST", "/api/v1/auth/register", map[string]any{
+			"full_name": name,
+			"email":     uniqueEmail("samename"),
+			"phone":     "+250788123456",
+			"password":  testPassword,
+		}, nil)
+		assert.Equal(t, 200, status, "registration %d with a shared name: %v", i+1, body)
+	}
+}

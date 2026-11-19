@@ -18,7 +18,7 @@ func TestPresignedURLRequestValidation(t *testing.T) {
 	base := func() PresignedURLRequest {
 		return PresignedURLRequest{
 			FileName: "cv.pdf",
-			FileType: "application/pdf",
+			FileType: "cv",
 			FileSize: 1024,
 		}
 	}
@@ -26,6 +26,32 @@ func TestPresignedURLRequestValidation(t *testing.T) {
 	t.Run("valid request", func(t *testing.T) {
 		req := base()
 		assert.NoError(t, validate.Struct(&req))
+	})
+
+	t.Run("accepts every document type", func(t *testing.T) {
+		for _, docType := range []string{"cv", "transcript", "diploma", "certificates", "cover_letter"} {
+			req := base()
+			req.FileType = docType
+			assert.NoError(t, validate.Struct(&req), docType)
+		}
+	})
+
+	t.Run("rejects unknown document type", func(t *testing.T) {
+		req := base()
+		req.FileType = "application/pdf"
+		assert.Error(t, validate.Struct(&req))
+	})
+
+	t.Run("accepts exactly the size limit", func(t *testing.T) {
+		req := base()
+		req.FileSize = MaxUploadBytes
+		assert.NoError(t, validate.Struct(&req))
+	})
+
+	t.Run("rejects files over the size limit", func(t *testing.T) {
+		req := base()
+		req.FileSize = MaxUploadBytes + 1
+		assert.Error(t, validate.Struct(&req))
 	})
 
 	t.Run("rejects empty file name", func(t *testing.T) {

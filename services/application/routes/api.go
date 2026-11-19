@@ -17,7 +17,7 @@ func SetupRoutes(app *fiber.App, applicationController *controller.ApplicationCo
 	applications.Post("/", applicationController.Create)
 	applications.Get("/:id", applicationController.Get)
 	applications.Patch("/:id/status", applicationController.UpdateStatus, middleware.AdminMiddleware())
-	applications.Post("/:id/notes", applicationController.AddNote)
+	applications.Post("/:id/notes", applicationController.AddNote, middleware.AdminMiddleware())
 
 	// Admin routes
 	applications.Get("/", applicationController.ListAll)

@@ -17,6 +17,7 @@ import (
 	"github.com/qonics/qonics-appy-api/libs/shared-package/logger"
 	"github.com/qonics/qonics-appy-api/libs/shared-package/utils"
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/sync/semaphore"
 )
 
 // defaultLogoURL is the Qonics app logo used in the shared email header. It is
@@ -24,26 +25,16 @@ import (
 const defaultLogoURL = "https://res.cloudinary.com/danzeqybu/image/upload/v1795014256/WhatsApp_Image_2026-11-18_at_5.02.48_PM_rudk0a.jpg"
 
 type NotificationEvent struct {
-	Channel       string                 `json:"channel"` // EMAIL or IN_APP
-	RecipientID   string                 `json:"recipient_id"`
-	RecipientType string                 `json:"recipient_type"` // USER or EMAIL
-	Subject       string                 `json:"subject"`
-	Template      string                 `json:"template,omitempty"` // HTML template name (leazi pattern)
-	Content       string                 `json:"content"`
-	Data          map[string]interface{} `json:"data"`
-	UserID        int                    `json:"user_id,omitempty"`
-}
-
-type CommunicationLog struct {
-	ID            int    `json:"id"`
-	Channel       string `json:"channel"`
-	RecipientID   string `json:"recipient_id"`
-	RecipientType string `json:"recipient_type"`
-	Subject       string `json:"subject"`
-	Status        string `json:"status"` // pending, sent, failed
-	ErrorMessage  string `json:"error_message"`
-	CreatedAt     string `json:"created_at"`
-	UpdatedAt     string `json:"updated_at"`
+	Channel       string         `json:"channel"` // EMAIL or IN_APP
+	RecipientID   string         `json:"recipient_id"`
+	RecipientType string         `json:"recipient_type"` // USER or EMAIL
+	Subject       string         `json:"subject"`
+	Template      string         `json:"template,omitempty"` // HTML template name (leazi pattern)
+	Content       string         `json:"content"`
+	Data          map[string]any `json:"data"`
+	UserID        int            `json:"user_id,omitempty"`
+	// Attempts counts failed deliveries so far (worker-internal, for retries).
+	Attempts int `json:"attempts,omitempty"`
 }
 
 func main() {
@@ -108,36 +99,51 @@ func main() {
 
 	log.Println("Notification worker started, waiting for jobs...")
 
+	// Move failed jobs back onto the queue once their retry delay has passed.
+	// The size-1 semaphore guarantees only one sweep runs at a time, even if
+	// one is slow; a tick that finds a sweep still running is skipped.
+	sweepSlot := semaphore.NewWeighted(1)
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			if !sweepSlot.TryAcquire(1) {
+				continue
+			}
+			go func() {
+				defer sweepSlot.Release(1)
+				promoteDueRetries(ctx, rdb)
+			}()
+		}
+	}()
+
+	// Jobs are processed concurrently (a slow SMTP send no longer holds up
+	// the queue), with at most maxConcurrentJobs in flight. A slot is taken
+	// before popping, so a job is only removed from Redis when it can start.
+	jobSlots := semaphore.NewWeighted(maxConcurrentJobs)
+
 	// Process notification jobs
 	for {
-		// Blocking pop from the notification queue
-		result, err := rdb.BRPop(ctx, 0*time.Second, "notification_queue").Result()
-		if err != nil {
-			log.Printf("Error reading from queue: %v", err)
-			time.Sleep(5 * time.Second)
-			continue
+		if err := jobSlots.Acquire(ctx, 1); err != nil {
+			log.Fatalf("Failed to acquire job slot: %v", err)
 		}
 
-		if len(result) < 2 {
+		// Blocking pop from the notification queue
+		result, err := rdb.BRPop(ctx, 0*time.Second, notificationQueue).Result()
+		if err != nil || len(result) < 2 {
+			jobSlots.Release(1)
+			if err != nil {
+				log.Printf("Error reading from queue: %v", err)
+				time.Sleep(5 * time.Second)
+			}
 			continue
 		}
 
 		// result[0] is the queue name, result[1] is the value
-		jobData := result[1]
-
-		var event NotificationEvent
-		if err := json.Unmarshal([]byte(jobData), &event); err != nil {
-			log.Printf("Error unmarshaling job: %v", err)
-			continue
-		}
-
-		// Process the notification
-		if err := processNotification(ctx, rdb, db, &event, cfg); err != nil {
-			log.Printf("Error processing notification: %v", err)
-		} else {
-			log.Printf("Processed notification: Channel=%s, Recipient=%s, Subject=%s",
-				event.Channel, event.RecipientID, event.Subject)
-		}
+		go func(jobData string) {
+			defer jobSlots.Release(1)
+			handleJob(ctx, rdb, db, cfg, jobData)
+		}(result[1])
 	}
 }
 
@@ -197,7 +203,7 @@ func sendEmail(event *NotificationEvent, cfg *config.Config) error {
 	if event.Template != "" {
 		// Inject shared template data used by the header/footer partials.
 		if event.Data == nil {
-			event.Data = map[string]interface{}{}
+			event.Data = map[string]any{}
 		}
 		if _, ok := event.Data["Year"]; !ok {
 			event.Data["Year"] = time.Now().Year()
@@ -241,7 +247,7 @@ func sendEmail(event *NotificationEvent, cfg *config.Config) error {
 		return fmt.Errorf("smtp send failed: %w", err)
 	}
 
-	log.Printf("[EMAIL] Sent to %s (subject=%q, template=%q)", event.RecipientID, event.Subject, event.Template)
+	log.Printf("[EMAIL] Sent to %s (subject=%q, template=%q)", maskRecipient(event.RecipientID), event.Subject, event.Template)
 	return nil
 }
 
@@ -325,4 +331,105 @@ func updateCommunicationLogStatus(ctx context.Context, db *pgxpool.Pool, logID i
 		WHERE id = $3
 	`, status, errorMessage, logID)
 	return err
+}
+
+const (
+	notificationQueue = "notification_queue"
+	// retryQueue is a sorted set of failed jobs scored by the unix time they
+	// become due again.
+	retryQueue = "notification_retry"
+	// maxAttempts is how many times a notification is tried before giving up.
+	maxAttempts = 3
+)
+
+// retryDelay is the wait before the next try after `attempts` failures:
+// 30s, then 60s.
+func retryDelay(attempts int) time.Duration {
+	return time.Duration(30<<(attempts-1)) * time.Second
+}
+
+// scheduleRetry puts a failed job on the retry queue, or reports that it has
+// used all its attempts.
+func scheduleRetry(ctx context.Context, rdb *redis.Client, event *NotificationEvent) (bool, error) {
+	event.Attempts++
+	if event.Attempts >= maxAttempts {
+		return false, nil
+	}
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return false, err
+	}
+	due := time.Now().Add(retryDelay(event.Attempts))
+	return true, rdb.ZAdd(ctx, retryQueue, redis.Z{Score: float64(due.Unix()), Member: payload}).Err()
+}
+
+// promoteDueRetries moves retry jobs whose time has come back onto the main
+// queue. ZRem decides ownership, so a job is never requeued twice.
+func promoteDueRetries(ctx context.Context, rdb *redis.Client) {
+	due, err := rdb.ZRangeByScore(ctx, retryQueue, &redis.ZRangeBy{Min: "-inf", Max: strconv.FormatInt(time.Now().Unix(), 10)}).Result()
+	if err != nil {
+		log.Printf("Error reading retry queue: %v", err)
+		return
+	}
+	for _, job := range due {
+		removed, err := rdb.ZRem(ctx, retryQueue, job).Result()
+		if err != nil || removed == 0 {
+			continue
+		}
+		if err := rdb.LPush(ctx, notificationQueue, job).Err(); err != nil {
+			log.Printf("Error requeueing notification: %v", err)
+		}
+	}
+}
+
+// maskRecipient hides most of an email address for logs ("j***@example.com").
+// Non-email recipients (user ids) are returned unchanged.
+func maskRecipient(recipient string) string {
+	at := strings.LastIndex(recipient, "@")
+	if at < 1 {
+		return recipient
+	}
+	return recipient[:1] + "***" + recipient[at:]
+}
+
+type CommunicationLog struct {
+	ID            int    `json:"id"`
+	Channel       string `json:"channel"`
+	RecipientID   string `json:"recipient_id"`
+	RecipientType string `json:"recipient_type"`
+	Subject       string `json:"subject"`
+	Status        string `json:"status"` // pending, sent, failed
+	ErrorMessage  string `json:"error_message"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
+}
+
+// maxConcurrentJobs is how many notifications are processed at the same time.
+const maxConcurrentJobs = 5
+
+// handleJob decodes and processes one queued notification, scheduling a
+// retry when it fails.
+func handleJob(ctx context.Context, rdb *redis.Client, db *pgxpool.Pool, cfg *config.Config, jobData string) {
+	var event NotificationEvent
+	if err := json.Unmarshal([]byte(jobData), &event); err != nil {
+		log.Printf("Error unmarshaling job: %v", err)
+		return
+	}
+
+	if err := processNotification(ctx, rdb, db, &event, cfg); err != nil {
+		retrying, retryErr := scheduleRetry(ctx, rdb, &event)
+		switch {
+		case retryErr != nil:
+			log.Printf("Error processing notification (could not schedule retry: %v): %v", retryErr, err)
+		case retrying:
+			log.Printf("Error processing notification (attempt %d of %d, retrying in %s): %v",
+				event.Attempts, maxAttempts, retryDelay(event.Attempts), err)
+		default:
+			log.Printf("Giving up on notification after %d attempts: Channel=%s, Recipient=%s, Subject=%s: %v",
+				maxAttempts, event.Channel, maskRecipient(event.RecipientID), event.Subject, err)
+		}
+		return
+	}
+	log.Printf("Processed notification: Channel=%s, Recipient=%s, Subject=%s",
+		event.Channel, maskRecipient(event.RecipientID), event.Subject)
 }

@@ -5,6 +5,7 @@ import (
 
 	"github.com/dgrijalva/jwt-go"
 	"github.com/gofiber/fiber/v2"
+	"github.com/qonics/qonics-appy-api/libs/shared-package/utils"
 )
 
 // AuthMiddleware validates JWT tokens and sets user context
@@ -30,7 +31,7 @@ func AuthMiddleware(jwtSecret string) fiber.Handler {
 		tokenString := parts[1]
 
 		// Parse and validate token
-		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (any, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, fiber.ErrUnauthorized
 			}
@@ -49,6 +50,8 @@ func AuthMiddleware(jwtSecret string) fiber.Handler {
 			c.Locals("user_id", claims["user_id"])
 			c.Locals("email", claims["email"])
 			c.Locals("role", claims["role"])
+			// Handlers read the caller through utils.GetUserPayload.
+			c.Locals(utils.UserPayloadKey, utils.NewUserPayload(claims["user_id"], claims["email"], claims["role"]))
 		}
 
 		return c.Next()

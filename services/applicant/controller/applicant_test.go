@@ -94,6 +94,10 @@ func init() {
 	activityLogs := applicantTestApp.Group("/api/v1/activity-logs", auth, middleware.AdminMiddleware())
 	activityLogs.Get("/", controller.ListActivityLogs)
 
+	// Same order as routes/api.go: the public route is registered before the
+	// admin-only settings group so its middleware never runs for it.
+	applicantTestApp.Get("/api/v1/settings/public", controller.GetPublicSettings)
+
 	settings := applicantTestApp.Group("/api/v1/settings", auth, middleware.AdminMiddleware())
 	settings.Get("/", controller.GetSettings)
 	settings.Put("/", controller.SaveSettings)
@@ -924,4 +928,73 @@ func TestNotificationFilterQueryParsing(t *testing.T) {
 	require.Len(t, gotParams, 2)
 	assert.Equal(t, true, gotParams[0])
 	assert.Equal(t, float64(42), gotParams[1])
+}
+
+// TestSaveProfileKeepsAccountEmailAndPhone: the profile email is the account
+// email and can't be changed here; leaving the name or phone out of the
+// request keeps the saved values instead of blanking them.
+func TestSaveProfileKeepsAccountEmailAndPhone(t *testing.T) {
+	s := seedApplicant(t)
+	auth := authHeaders(s.UserID, "applicant")
+
+	payload := profilePayload(s)
+	payload["email"] = "someone-else@example.com"
+	delete(payload, "phone")
+	delete(payload, "full_name")
+	payload["city"] = "Musanze" // a real change so the save isn't "no changes"
+
+	status, body := doJSON(t, "PUT", "/api/v1/applicant/profile", payload, auth)
+	require.Equal(t, fiber.StatusOK, status, "save failed: %v", body)
+
+	status, body = doJSON(t, "GET", "/api/v1/applicant/profile", nil, auth)
+	require.Equal(t, fiber.StatusOK, status, "get failed: %v", body)
+	data := body["data"].(map[string]any)
+	assert.Equal(t, s.Email, data["email"], "email must not change through the profile")
+	assert.Equal(t, s.Phone, data["phone"], "omitted phone must be kept")
+	assert.Equal(t, s.Name, data["full_name"], "omitted name must be kept")
+	assert.Equal(t, "Musanze", data["city"])
+}
+
+// TestGetPublicSettingsRoute covers GET /api/v1/settings/public (no login).
+func TestGetPublicSettingsRoute(t *testing.T) {
+	ctx := context.Background()
+	setSettings := func(open bool, closeOn any, message string) {
+		_, err := applicantTestDB.Exec(ctx, `
+			INSERT INTO settings (id, applications_open, close_on, closure_message)
+			VALUES (1, $1, $2, $3)
+			ON CONFLICT (id) DO UPDATE SET applications_open = $1, close_on = $2, closure_message = $3
+		`, open, closeOn, message)
+		require.NoError(t, err)
+	}
+	// Leave the window open for the other settings tests.
+	t.Cleanup(func() { setSettings(true, nil, "") })
+
+	tests := []struct {
+		name        string
+		open        bool
+		closeOn     any
+		message     string
+		wantOpen    bool
+		wantMessage string
+	}{
+		{name: "open without login", open: true, wantOpen: true},
+		{name: "closed by admin shows message", open: false, message: "Back in January", wantOpen: false, wantMessage: "Back in January"},
+		{name: "closed by admin, default message", open: false, wantOpen: false, wantMessage: "Applications are currently closed."},
+		{name: "closing date passed counts as closed", open: true, closeOn: time.Now().Add(-time.Hour), wantOpen: false},
+		{name: "future closing date stays open", open: true, closeOn: time.Now().Add(48 * time.Hour), wantOpen: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setSettings(test.open, test.closeOn, test.message)
+			status, body := doJSON(t, "GET", "/api/v1/settings/public", nil, nil)
+			require.Equal(t, fiber.StatusOK, status, "body: %v", body)
+			data, ok := body["data"].(map[string]any)
+			require.True(t, ok, "response should have data: %v", body)
+			assert.Equal(t, test.wantOpen, data["applications_open"])
+			if test.wantMessage != "" {
+				assert.Equal(t, test.wantMessage, data["closure_message"])
+			}
+		})
+	}
 }
