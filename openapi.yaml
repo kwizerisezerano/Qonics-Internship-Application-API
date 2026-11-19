@@ -210,6 +210,45 @@ components:
         read:
           type: boolean
 
+    ActivityLog:
+      type: object
+      description: A single audit-trail entry recorded for a write action
+      properties:
+        id:
+          type: integer
+        activity_type:
+          type: string
+          description: e.g. APPLICATION_SUBMIT, SETTINGS_UPDATE
+        status:
+          type: string
+          enum: [success, failure]
+        description:
+          type: string
+        user_id:
+          type: integer
+          nullable: true
+          description: Acting user id (null for system/anonymous actions)
+        username:
+          type: string
+          description: Decrypted full name of the acting user
+        email:
+          type: string
+          format: email
+          description: Decrypted email of the acting user
+        role:
+          type: string
+          enum: [applicant, admin]
+        ip_address:
+          type: string
+        user_agent:
+          type: string
+        extra:
+          type: string
+          description: JSON-encoded extra metadata
+        created_at:
+          type: string
+          format: date-time
+
     Booking:
       type: object
       properties:
@@ -986,6 +1025,136 @@ paths:
                               type: integer
                   meta:
                     $ref: '#/components/schemas/PaginationMeta'
+
+  /activity-logs:
+    get:
+      tags:
+        - Admin
+      summary: Get activity logs
+      description: >-
+        Get the audit activity logs (admin only), paginated most-recent-first.
+        Supports the leazi filter contract: exact / not-equal / contains /
+        starts-with / ends-with matches on activity_type, status and role
+        filters, and created_at range bounds. The search parameter matches the
+        description case-insensitively and encrypted PII (username/email) by
+        exact SHA-256 hash.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - $ref: '#/components/parameters/SearchParam'
+        - name: activity_type
+          in: query
+          required: false
+          description: Exact match on activity type
+          schema:
+            type: string
+        - name: activity_type_neq
+          in: query
+          required: false
+          description: Exclude an exact activity type
+          schema:
+            type: string
+        - name: activity_type_c
+          in: query
+          required: false
+          description: Activity type contains (case-insensitive)
+          schema:
+            type: string
+        - name: activity_type_sw
+          in: query
+          required: false
+          description: Activity type starts with
+          schema:
+            type: string
+        - name: activity_type_ew
+          in: query
+          required: false
+          description: Activity type ends with
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          description: Filter by log status
+          schema:
+            type: string
+            enum: [success, failure]
+        - name: status_neq
+          in: query
+          required: false
+          description: Exclude a log status
+          schema:
+            type: string
+            enum: [success, failure]
+        - name: user_id
+          in: query
+          required: false
+          description: Filter by the acting user id
+          schema:
+            type: integer
+        - name: role
+          in: query
+          required: false
+          description: Filter by the acting user's role
+          schema:
+            type: string
+            enum: [applicant, admin]
+        - name: created_at
+          in: query
+          required: false
+          description: Exact created_at match (RFC3339 or YYYY-MM-DD)
+          schema:
+            type: string
+        - name: created_after
+          in: query
+          required: false
+          description: Lower bound on created_at (inclusive)
+          schema:
+            type: string
+        - name: created_before
+          in: query
+          required: false
+          description: Upper bound on created_at (inclusive)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Activity logs retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ActivityLog'
+                  meta:
+                    $ref: '#/components/schemas/PaginationMeta'
+        '400':
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden (admin only)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /settings:
     get:
