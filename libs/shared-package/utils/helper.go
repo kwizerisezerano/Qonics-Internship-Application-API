@@ -2,12 +2,25 @@ package utils
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"html/template"
 	"reflect"
 	"strings"
 )
+
+// SecureRandString returns a cryptographically secure random hex string built
+// from n random bytes (2n hex characters). It mirrors leazi's helper of the
+// same name and is used for single-use tokens such as password resets.
+func SecureRandString(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
 
 // EmailTemplatesDir is the directory that holds the HTML email templates. It
 // mirrors the leazi worker layout (/app/templates) and can be overridden, e.g.

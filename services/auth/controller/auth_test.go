@@ -9,6 +9,8 @@ import (
 	"math/rand"
 	"net/http/httptest"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -462,9 +464,9 @@ func TestResetPasswordRoute(t *testing.T) {
 		check      func(t *testing.T, body map[string]any)
 	}{
 		{
-			name:       "success - strong password and token",
-			payload:    map[string]any{"token": "reset-token", "password": "N3w@Passw0rd"},
-			wantStatus: 200,
+			name:       "bad request - unknown token",
+			payload:    map[string]any{"token": "no-such-token", "password": "N3w@Passw0rd"},
+			wantStatus: 400,
 		},
 		{
 			name:       "validation - weak password",
@@ -507,6 +509,51 @@ func TestResetPasswordRoute(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPasswordResetFlow exercises the real forgot -> emailed token -> reset
+// flow end-to-end, including the single-use invalidation of the token.
+func TestPasswordResetFlow(t *testing.T) {
+	email, userID := registerUser(t, "resetflow")
+	ctx := context.Background()
+	rdb := authTestCfg.InitRedis()
+
+	// 1. Request a reset link.
+	status, body := doJSON(t, "POST", "/api/v1/auth/forgot-password", map[string]any{"email": email}, nil)
+	require.Equal(t, 200, status, "forgot-password failed: %v", body)
+
+	// 2. The token must have been stored in Redis pointing at this user.
+	keys, err := rdb.Keys(ctx, passwordResetKeyPrefix+"*").Result()
+	require.NoError(t, err)
+	var token string
+	for _, k := range keys {
+		val, err := rdb.Get(ctx, k).Result()
+		if err == nil && val == strconv.Itoa(userID) {
+			token = strings.TrimPrefix(k, passwordResetKeyPrefix)
+			break
+		}
+	}
+	require.NotEmpty(t, token, "no reset token stored for user %d", userID)
+
+	// 3. Reset the password with a strong new value.
+	status, body = doJSON(t, "POST", "/api/v1/auth/reset-password", map[string]any{
+		"token":    token,
+		"password": "N3w@Passw0rd",
+	}, nil)
+	require.Equal(t, 200, status, "reset-password failed: %v", body)
+
+	// 4. The old password no longer works and the new one does.
+	status, _ = doJSON(t, "POST", "/api/v1/auth/login", map[string]any{"email": email, "password": testPassword}, nil)
+	require.Equal(t, 401, status, "old password should no longer work")
+	status, body = doJSON(t, "POST", "/api/v1/auth/login", map[string]any{"email": email, "password": "N3w@Passw0rd"}, nil)
+	require.Equal(t, 200, status, "new password should work: %v", body)
+
+	// 5. The token is single-use.
+	status, _ = doJSON(t, "POST", "/api/v1/auth/reset-password", map[string]any{
+		"token":    token,
+		"password": "An0ther@Pass",
+	}, nil)
+	require.Equal(t, 400, status, "reset token must be single-use")
 }
 
 // TestChangePasswordRoute covers POST /api/v1/auth/change-password. Every

@@ -3,6 +3,9 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
@@ -15,6 +18,13 @@ import (
 	"github.com/qonics/qonics-appy-api/services/auth/model"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
+)
+
+const (
+	// passwordResetKeyPrefix namespaces the single-use reset tokens kept in Redis.
+	passwordResetKeyPrefix = "password_reset:"
+	// passwordResetTTL bounds how long a reset link stays valid.
+	passwordResetTTL = 30 * time.Minute
 )
 
 type AuthController struct {
@@ -296,9 +306,63 @@ func (ac *AuthController) ForgotPassword(c *fiber.Ctx) error {
 		return utils.JsonValidationErrorResponse(c, err)
 	}
 
-	// In a real implementation, send email with reset token
-	// For now, just return success
-	return utils.JsonSuccessResponse(c, "If an account exists with this email, a password reset link has been sent", nil)
+	ctx := context.Background()
+
+	// Always answer with the same message so account existence is never revealed.
+	genericResponse := utils.JsonSuccessResponse(c, "If an account exists with this email, a password reset link has been sent", nil)
+
+	var userID int
+	var fullNameEncrypted []byte
+	err := ac.DB.QueryRow(ctx, `
+		SELECT id, full_name_encrypted FROM users WHERE email_hash = $1
+	`, utils.HashData(req.Email)).Scan(&userID, &fullNameEncrypted)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			// No such account: return the generic success without sending anything.
+			return genericResponse
+		}
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Database error", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	// Generate a single-use reset token and keep it in Redis until it expires.
+	token, err := utils.SecureRandString(32)
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to generate reset token", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	resetKey := passwordResetKeyPrefix + token
+	if err := ac.Redis.Set(ctx, resetKey, strconv.Itoa(userID), passwordResetTTL).Err(); err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to store reset token", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	fullName, _ := utils.DecryptData(ctx, ac.DB, fullNameEncrypted)
+
+	// Queue the branded reset email (leazi pattern); a delivery failure must not
+	// change the response so account state is never leaked.
+	if err := utils.PublishTemplatedEmailNotification(ctx, ac.Redis, req.Email, "Reset your Qonics password", "password_reset", map[string]interface{}{
+		"name":       fullName,
+		"email":      req.Email,
+		"reset_url":  frontendResetURL(ac.Config.WebURL, token),
+		"expires_in": "30 minutes",
+	}); err != nil {
+		fmt.Printf("WARNING: Failed to send password reset email: %v\n", err)
+	}
+
+	utils.RecordSuccessActivityLog(c, ac.DB, userID, "PASSWORD_RESET_REQUEST", "Requested a password reset link", nil)
+
+	return genericResponse
 }
 
 // ResetPassword handles password reset
@@ -312,8 +376,63 @@ func (ac *AuthController) ResetPassword(c *fiber.Ctx) error {
 		return utils.JsonValidationErrorResponse(c, err)
 	}
 
-	// In a real implementation, validate token and update password
+	ctx := context.Background()
+
+	// The token is single-use: a missing key means it is invalid or expired.
+	resetKey := passwordResetKeyPrefix + req.Token
+	userIDStr, err := ac.Redis.Get(ctx, resetKey).Result()
+	if err == redis.Nil {
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid or expired reset token")
+	}
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to verify reset token", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	userID, err := strconv.Atoi(userIDStr)
+	if err != nil || userID <= 0 {
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid or expired reset token")
+	}
+
+	// Hash the new password and persist it.
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to hash password", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	if _, err := ac.DB.Exec(ctx, "UPDATE users SET password_hash = $1 WHERE id = $2", string(hashedPassword), userID); err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to update password", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+
+	// Invalidate the token so the link can only be used once.
+	ac.Redis.Del(ctx, resetKey)
+
+	utils.RecordSuccessActivityLog(c, ac.DB, userID, "PASSWORD_RESET", "User reset password via emailed link", nil)
+
 	return utils.JsonSuccessResponse(c, "Password reset successful", nil)
+}
+
+// frontendResetURL builds the password-reset link consumed by the frontend
+// reset page (/auth/reset-password?token=...). WebURL is configured as a full
+// page URL (e.g. http://localhost:3000/auth/login), so only its origin is used
+// as the base of the link.
+func frontendResetURL(webURL, token string) string {
+	origin := strings.TrimRight(webURL, "/")
+	if u, err := url.Parse(webURL); err == nil && u.Scheme != "" && u.Host != "" {
+		origin = u.Scheme + "://" + u.Host
+	}
+	return fmt.Sprintf("%s/auth/reset-password?token=%s", origin, token)
 }
 
 // ChangePassword handles password change for authenticated users
