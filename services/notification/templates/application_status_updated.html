@@ -49,6 +49,12 @@
                                     <td style="padding: 14px 20px; font-family: Montserrat, sans-serif; font-size: 14px; font-weight: 600; color: #28a745;">New Status</td>
                                     <td style="padding: 14px 20px; font-family: 'Courier New', monospace; font-size: 14px; color: #212529;">{{.status}}</td>
                                 </tr>
+                                {{if .interview_at}}
+                                <tr>
+                                    <td style="padding: 14px 20px; font-family: Montserrat, sans-serif; font-size: 14px; font-weight: 600; color: #28a745; border-top: 1px solid #e9ecef;">Interview</td>
+                                    <td style="padding: 14px 20px; font-family: Montserrat, sans-serif; font-size: 14px; color: #212529; border-top: 1px solid #e9ecef;">{{.interview_at}}</td>
+                                </tr>
+                                {{end}}
                                 {{if .note}}
                                 <tr>
                                     <td style="padding: 14px 20px; font-family: Montserrat, sans-serif; font-size: 14px; font-weight: 600; color: #28a745; border-top: 1px solid #e9ecef; vertical-align: top;">Note</td>

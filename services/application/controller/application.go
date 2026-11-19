@@ -507,18 +507,32 @@ func (ac *ApplicationController) UpdateStatus(c *fiber.Ctx) error {
 		// Notify the applicant over both channels (in-app + email). The student
 		// must learn about a status change regardless of which channel they use.
 		// The email is rendered from an HTML template (leazi pattern).
-		notificationTitle := fmt.Sprintf("Application Status Updated: %s", req.Status)
-		notificationMessage := fmt.Sprintf("Your application status has been updated to %s. %s", req.Status, req.Note)
+		statusLabel := utils.HumanizeStatus(req.Status)
+
+		// Format the interview date (Africa/Kigali, UTC+2) when one is provided so
+		// an interview status change always carries the scheduled date and time.
+		interviewLabel := ""
+		if interviewAt != nil {
+			kigali := time.FixedZone("CAT", 2*60*60)
+			interviewLabel = interviewAt.In(kigali).Format("Monday, 02 January 2006 at 15:04")
+		}
+
+		notificationTitle := fmt.Sprintf("Application Status Updated: %s", statusLabel)
+		notificationMessage := fmt.Sprintf("Your application status has been updated to %s. %s", statusLabel, req.Note)
+		if interviewLabel != "" {
+			notificationMessage = fmt.Sprintf("Your application status has been updated to %s. Interview scheduled for %s. %s", statusLabel, interviewLabel, req.Note)
+		}
 		if err := utils.PublishInAppNotification(ctx, ac.Redis, applicantUserID, notificationTitle, notificationMessage); err != nil {
 			// Log warning but don't fail the update
 			fmt.Printf("WARNING: Failed to send status update notification: %v\n", err)
 		}
 		if applicantEmail, applicantName := ac.applicantContact(ctx, applicantUserID); applicantEmail != "" {
 			if err := utils.PublishTemplatedEmailNotification(ctx, ac.Redis, applicantEmail, notificationTitle, "application_status_updated", map[string]interface{}{
-				"name":      applicantName,
-				"reference": reference,
-				"status":    req.Status,
-				"note":      req.Note,
+				"name":         applicantName,
+				"reference":    reference,
+				"status":       statusLabel,
+				"note":         req.Note,
+				"interview_at": interviewLabel,
 			}); err != nil {
 				fmt.Printf("WARNING: Failed to send status update email: %v\n", err)
 			}
