@@ -43,6 +43,17 @@ func GenerateHtmlTemplate(filename string, emailData any) (string, error) {
 	return body.String(), nil
 }
 
+// HumanizeStatus turns a machine status value into a human-readable, title-cased
+// label for display in notifications and emails, e.g. "under_review" ->
+// "Under Review".
+func HumanizeStatus(status string) string {
+	words := strings.Fields(strings.ReplaceAll(strings.TrimSpace(status), "_", " "))
+	for i, word := range words {
+		words[i] = strings.ToUpper(word[:1]) + strings.ToLower(word[1:])
+	}
+	return strings.Join(words, " ")
+}
+
 // AvailableSourceTable lists the tables that may own a file through the
 // polymorphic source_table / source_table_id pair (leazi-style allow-list).
 var AvailableSourceTable = []string{

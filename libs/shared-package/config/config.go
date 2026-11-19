@@ -103,6 +103,7 @@ func LoadConfig(serviceName string) (*Config, error) {
 	viper.BindEnv("redis.db", "REDIS_DB")
 	viper.BindEnv("jwt.secret", "JWT_SECRET")
 	viper.BindEnv("encryption.key", "ENCRYPTION_KEY")
+	viper.BindEnv("weburl", "WEB_URL")
 
 	// Cloudflare R2 configuration (file service)
 	viper.BindEnv("cloudflare.account_id", "CLOUDFLARE_ACCOUNT_ID")

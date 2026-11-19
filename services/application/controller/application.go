@@ -236,6 +236,32 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		return utils.JsonValidationErrorResponse(c, err)
 	}
 
+	// Enforce the admin-controlled intake window (settings row id = 1) before any
+	// work is done: submissions are rejected when applications are switched off
+	// or when the closing date has arrived. A missing settings row means open.
+	var applicationsOpen bool
+	var closeOn *time.Time
+	var closureMessage string
+	err = ac.DB.QueryRow(ctx, `
+		SELECT applications_open, close_on, closure_message
+		FROM settings WHERE id = 1
+	`).Scan(&applicationsOpen, &closeOn, &closureMessage)
+	if err != nil && err != pgx.ErrNoRows {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to load application settings", utils.Logger{
+			LogLevel:    utils.CRITICAL,
+			Message:     err.Error(),
+			ServiceName: ac.Config.ServiceName,
+		})
+	}
+	if err == nil && (!applicationsOpen || (closeOn != nil && !closeOn.After(time.Now()))) {
+		message := closureMessage
+		if message == "" {
+			message = "Applications are currently closed."
+		}
+		// Known error - intake window closed, no logging
+		return utils.JsonErrorResponse(c, fiber.StatusForbidden, message)
+	}
+
 	// Get applicant profile ID
 	var profileID string
 	// Convert userID to int for database query
@@ -270,8 +296,9 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		}
 	}
 
-	// Generate reference
-	reference := fmt.Sprintf("APP-%d", time.Now().Unix())
+	// Generate reference (nanosecond precision keeps it unique even when two
+	// applications are submitted within the same second).
+	reference := fmt.Sprintf("APP-%d", time.Now().UnixNano())
 	appID := uuid.New().String()
 
 	var startDate *time.Time
@@ -344,7 +371,7 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 	}
 
 	applicantSubject := "Application Submitted Successfully"
-	applicantMessage := fmt.Sprintf("Your application for %s - %s has been submitted successfully. Reference: %s", req.Department, req.Specialization, reference)
+	applicantMessage := fmt.Sprintf("Your application for %s - %s has been submitted successfully and is awaiting review. You will be notified once it has been reviewed. Reference: %s", req.Department, req.Specialization, reference)
 	if err := utils.PublishInAppNotification(ctx, ac.Redis, userIDInt, applicantSubject, applicantMessage); err != nil {
 		fmt.Printf("WARNING: Failed to send application submission notification: %v\n", err)
 	}
@@ -366,6 +393,7 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		"reference":      reference,
 		"department":     req.Department,
 		"specialization": req.Specialization,
+		"login_url":      ac.Config.WebURL,
 	}); err != nil {
 		fmt.Printf("WARNING: Failed to notify admins of new application: %v\n", err)
 	}

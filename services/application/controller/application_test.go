@@ -408,6 +408,69 @@ func TestCreateApplicationRoute(t *testing.T) {
 	}
 }
 
+// TestCreateApplicationClosedWindow covers the settings-driven intake gate: when
+// an admin closes applications (or the closing date has arrived), POST
+// /api/v1/applications/ is rejected with the closure message.
+func TestCreateApplicationClosedWindow(t *testing.T) {
+	profile := seedProfile(t)
+	auth := authHeaders(profile.UserID, "applicant")
+	ctx := context.Background()
+
+	setSettings := func(appsOpen bool, closeOn any, message string) {
+		t.Helper()
+		_, err := applicationTestDB.Exec(ctx,
+			`UPDATE settings SET applications_open = $1, close_on = $2, closure_message = $3 WHERE id = 1`,
+			appsOpen, closeOn, message)
+		require.NoError(t, err)
+	}
+	// Always restore an open window for the other tests sharing this database.
+	defer setSettings(true, nil, "")
+
+	tests := []struct {
+		name       string
+		appsOpen   bool
+		closeOn    any
+		message    string
+		wantStatus int
+		wantMsg    string
+	}{
+		{
+			name:       "forbidden - applications switched off",
+			appsOpen:   false,
+			closeOn:    nil,
+			message:    "Intake is closed for this cohort.",
+			wantStatus: fiber.StatusForbidden,
+			wantMsg:    "Intake is closed for this cohort.",
+		},
+		{
+			name:       "forbidden - closing date already passed",
+			appsOpen:   true,
+			closeOn:    time.Now().AddDate(0, 0, -1),
+			message:    "",
+			wantStatus: fiber.StatusForbidden,
+			wantMsg:    "Applications are currently closed.",
+		},
+		{
+			name:       "success - window open",
+			appsOpen:   true,
+			closeOn:    nil,
+			message:    "",
+			wantStatus: fiber.StatusOK,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setSettings(test.appsOpen, test.closeOn, test.message)
+			status, body := doJSON(t, "POST", "/api/v1/applications/", validApplicationPayload(), auth)
+			assert.Equal(t, test.wantStatus, status)
+			if test.wantMsg != "" {
+				assert.Equal(t, test.wantMsg, body["message"])
+			}
+		})
+	}
+}
+
 // TestListMineRoute covers GET /api/v1/applications/mine.
 func TestListMineRoute(t *testing.T) {
 	profile := seedProfile(t)
