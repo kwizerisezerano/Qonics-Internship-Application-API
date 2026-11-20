@@ -3,9 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
@@ -22,7 +20,7 @@ import (
 
 const (
 	// passwordResetKeyPrefix namespaces the single-use reset tokens kept in Redis.
-	passwordResetKeyPrefix = "password_reset:"
+	passwordResetKeyPrefix = utils.PasswordResetKeyPrefix
 	// passwordResetTTL bounds how long a reset link stays valid.
 	passwordResetTTL = 30 * time.Minute
 )
@@ -426,16 +424,9 @@ func (ac *AuthController) ResetPassword(c *fiber.Ctx) error {
 	return utils.JsonSuccessResponse(c, "Password reset successful", nil)
 }
 
-// frontendResetURL builds the password-reset link consumed by the frontend
-// reset page (/auth/reset-password?token=...). WebURL is configured as a full
-// page URL (e.g. http://localhost:3000/auth/login), so only its origin is used
-// as the base of the link.
+// frontendResetURL builds the password-reset link for the frontend reset page.
 func frontendResetURL(webURL, token string) string {
-	origin := strings.TrimRight(webURL, "/")
-	if u, err := url.Parse(webURL); err == nil && u.Scheme != "" && u.Host != "" {
-		origin = u.Scheme + "://" + u.Host
-	}
-	return fmt.Sprintf("%s/auth/reset-password?token=%s", origin, token)
+	return utils.FrontendResetURL(webURL, token)
 }
 
 // ChangePassword handles password change for authenticated users

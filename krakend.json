@@ -592,6 +592,16 @@
       "endpoint": "/applications",
       "method": "POST",
       "output_encoding": "no-op",
+      "extra_config": {
+        "qos/ratelimit/router": {
+          "max_rate": 1000,
+          "capacity": 1000,
+          "client_max_rate": 10,
+          "client_capacity": 10,
+          "every": "1m",
+          "strategy": "ip"
+        }
+      },
       "input_headers": [
         "Content-Type",
         "Accept",
@@ -733,6 +743,72 @@
             "backend/http": {
               "return_error_details": "backend_alias",
               "status": [200, 201, 400, 401, 403, 404, 406, 409, 429, 500]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "endpoint": "/files/guest/presigned-url",
+      "method": "POST",
+      "output_encoding": "no-op",
+      "extra_config": {
+        "qos/ratelimit/router": {
+          "max_rate": 1000,
+          "capacity": 1000,
+          "client_max_rate": 15,
+          "client_capacity": 15,
+          "every": "1m",
+          "strategy": "ip"
+        }
+      },
+      "input_headers": [
+        "Content-Type",
+        "Accept"
+      ],
+      "backend": [
+        {
+          "host": ["http://file:9000"],
+          "url_pattern": "/api/v1/files/guest/presigned-url",
+          "encoding": "no-op",
+          "disable_host_sanitize": true,
+          "extra_config": {
+            "backend/http": {
+              "return_error_details": "backend_alias",
+              "status": [200, 201, 400, 403, 404, 429, 500]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "endpoint": "/files/guest/confirm-upload",
+      "method": "POST",
+      "output_encoding": "no-op",
+      "extra_config": {
+        "qos/ratelimit/router": {
+          "max_rate": 1000,
+          "capacity": 1000,
+          "client_max_rate": 15,
+          "client_capacity": 15,
+          "every": "1m",
+          "strategy": "ip"
+        }
+      },
+      "input_headers": [
+        "Content-Type",
+        "Accept"
+      ],
+      "backend": [
+        {
+          "host": ["http://file:9000"],
+          "url_pattern": "/api/v1/files/guest/confirm-upload",
+          "encoding": "no-op",
+          "disable_host_sanitize": true,
+          "extra_config": {
+            "backend/http": {
+              "return_error_details": "backend_alias",
+              "status": [200, 201, 400, 403, 404, 429, 500]
             }
           }
         }

@@ -814,8 +814,23 @@ paths:
       tags:
         - Applications
       summary: Create application
-      description: Create a new application with document uploads
+      description: |
+        Create a new application. Open to guests: without a bearer token the body
+        must also carry `full_name`, `email` and `phone`; the account is created
+        immediately and an email with a link to set a password is sent so the
+        applicant can open the portal later. If the email already has an account
+        the call answers 409 and asks them to log in. Logged-in applicants apply
+        under their own account as before.
+
+        Guests can attach documents: upload each file first with
+        `POST /files/guest/presigned-url` (no token needed; the first response
+        returns a `guest_token`, send it back with later uploads, max 5 files),
+        PUT the file to the returned URL, confirm it with
+        `POST /files/guest/confirm-upload` (`file_id` + `guest_token`), then send
+        the confirmed `document_ids` together with the same `guest_token` here.
+        Unclaimed uploads are deleted after 24 hours.
       security:
+        - {}
         - bearerAuth: []
       requestBody:
         required: true

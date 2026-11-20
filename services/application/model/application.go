@@ -170,6 +170,12 @@ type ReviewNote struct {
 }
 
 type NewApplicationPayload struct {
+	// Contact details, required only when applying without being logged in
+	// (the controller enforces that); ignored for logged-in applicants.
+	FullName string `json:"full_name" validate:"omitempty,max=150,name"`
+	Email    string `json:"email" validate:"omitempty,email"`
+	Phone    string `json:"phone" validate:"omitempty,max=30,phone"`
+
 	Department     string   `json:"department" validate:"required,oneof=software iot"`
 	Specialization string   `json:"specialization" validate:"required,specialization"`
 	Motivation     string   `json:"motivation" validate:"required,max=2000"`
@@ -180,6 +186,9 @@ type NewApplicationPayload struct {
 	DurationMonths int      `json:"duration_months" validate:"required,min=1"`
 	WorkMode       string   `json:"work_mode" validate:"required,oneof=onsite remote hybrid"`
 	DocumentIDs    []string `json:"document_ids" validate:"omitempty,dive,uuid"`
+	// GuestToken proves ownership of documents a guest uploaded before applying
+	// (returned by the file service's guest upload); only used without a login.
+	GuestToken string `json:"guest_token" validate:"omitempty,len=32,hexadecimal"`
 }
 
 type StatusUpdatePayload struct {

@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -13,6 +14,7 @@ import (
 	"github.com/qonics/qonics-appy-api/libs/shared-package/utils"
 	"github.com/qonics/qonics-appy-api/services/application/model"
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type ApplicationController struct {
@@ -194,11 +196,18 @@ func (ac *ApplicationController) Get(c *fiber.Ctx) error {
 }
 
 // Create creates a new application
+//
+// Logged-in applicants apply under their own account. Guests (no token) must
+// send full_name, email and phone: their account and profile are created in the
+// same transaction as the application, and an email with a link to set a
+// password is sent so they can open the portal later.
 func (ac *ApplicationController) Create(c *fiber.Ctx) error {
-	user, ok := utils.GetUserPayload(c)
-	if !ok {
+	user, loggedIn := utils.GetUserPayload(c)
+	if !loggedIn && c.Get("Authorization") != "" {
+		// A token was sent but identifies nobody: not a guest, so reject it.
 		return utils.JsonErrorResponse(c, fiber.StatusUnauthorized, "Unauthorized")
 	}
+	guest := !loggedIn
 
 	ctx := context.Background()
 
@@ -207,12 +216,24 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		// Known error - invalid request body, no logging
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
+	req.Email = utils.NormalizeEmail(req.Email)
 
 	// Validate the submitted values (department, specialization and the other
 	// enumerated fields) before touching the database.
 	if err := model.Validate.Struct(&req); err != nil {
 		// Known error - invalid payload, no logging
 		return utils.JsonValidationErrorResponse(c, err)
+	}
+
+	if guest {
+		if req.FullName == "" || req.Email == "" || req.Phone == "" {
+			// Known error - missing contact details, no logging
+			return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Full name, email and phone are required to apply")
+		}
+		if len(req.DocumentIDs) > 0 && req.GuestToken == "" {
+			// Known error - a guest's documents are tied to their upload token.
+			return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "guest_token is required to attach documents")
+		}
 	}
 
 	// Enforce the admin-controlled intake window before any work is done.
@@ -227,13 +248,19 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 
 	// The caller's profile id, name and email in one query (used for the
 	// application row and the notifications).
-	applicant, err := ac.applicantByUser(ctx, user.ID)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			// Known error - profile not found, no logging
-			return utils.JsonErrorResponse(c, fiber.StatusNotFound, "Applicant profile not found")
+	var applicant applicantRef
+	if guest {
+		// The profile is created inside the transaction below.
+		applicant = applicantRef{ProfileID: uuid.New().String(), Name: req.FullName, Email: req.Email}
+	} else {
+		applicant, err = ac.applicantByUser(ctx, user.ID)
+		if err != nil {
+			if err == pgx.ErrNoRows {
+				// Known error - profile not found, no logging
+				return utils.JsonErrorResponse(c, fiber.StatusNotFound, "Applicant profile not found")
+			}
+			return ac.internalError(c, "Failed to create application", err)
 		}
-		return ac.internalError(c, "Failed to create application", err)
 	}
 
 	var startDate *time.Time
@@ -250,12 +277,21 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 	// checked for all documents in one query.
 	ownerID := fmt.Sprintf("%d", user.ID)
 	documentIDs := uniqueStrings(req.DocumentIDs)
+
+	// A logged-in applicant's documents are confirmed files they own. A guest's
+	// are files uploaded with their guest token: confirmed (uploaded_at) but
+	// still carrying the pending expiry until this application claims them.
+	docOwner, docState := ownerID, "deleted_at IS NULL"
+	if guest {
+		docOwner = utils.GuestUploadOwner(req.GuestToken)
+		docState = "uploaded_at IS NOT NULL AND deleted_at > NOW()"
+	}
 	if len(documentIDs) > 0 {
 		var owned int
 		err = ac.DB.QueryRow(ctx, `
 			SELECT COUNT(id) FROM files
-			WHERE id = ANY($1) AND owner_id = $2 AND deleted_at IS NULL
-		`, documentIDs, ownerID).Scan(&owned)
+			WHERE id = ANY($1) AND owner_id = $2 AND `+docState+`
+		`, documentIDs, docOwner).Scan(&owned)
 		if err != nil {
 			return ac.internalError(c, "Failed to verify documents", err)
 		}
@@ -276,6 +312,17 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		return ac.internalError(c, "Failed to create application", err)
 	}
 	defer tx.Rollback(ctx)
+
+	// Guests get their account and profile first; if anything below fails (full
+	// session, bad data) the rollback removes them again.
+	if guest {
+		userID, ok := ac.createGuestAccount(c, tx, applicant.ProfileID, req)
+		if !ok {
+			return nil // the error response is already written
+		}
+		user = utils.UserPayload{ID: userID, Email: req.Email, Role: "applicant"}
+		ownerID = fmt.Sprintf("%d", user.ID)
+	}
 
 	// One applicant can't hold two live applications for the same track. The
 	// per-applicant lock makes a double-click submit wait for the first one.
@@ -340,9 +387,10 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 	if len(documentIDs) > 0 {
 		result, err := tx.Exec(ctx, `
 			UPDATE files
-			SET source_table = 'applications', source_table_id = $1
-			WHERE id = ANY($2) AND owner_id = $3 AND deleted_at IS NULL
-		`, appID, documentIDs, ownerID)
+			SET source_table = 'applications', source_table_id = $1,
+			    owner_id = $4, deleted_at = NULL
+			WHERE id = ANY($2) AND owner_id = $3 AND `+docState+`
+		`, appID, documentIDs, docOwner, ownerID)
 		if err != nil {
 			return ac.internalError(c, "Failed to attach documents", err)
 		}
@@ -364,6 +412,11 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 
 	if err := tx.Commit(ctx); err != nil {
 		return ac.internalError(c, "Failed to create application", err)
+	}
+
+	if guest {
+		utils.RecordSuccessActivityLog(c, ac.DB, user.ID, "USER_REGISTER", "Account created while applying", nil)
+		ac.sendGuestAccessEmail(ctx, user.ID, req.FullName, req.Email)
 	}
 	departmentName := model.DisplayName(req.Department)
 	specializationName := model.DisplayName(req.Specialization)
@@ -421,6 +474,96 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 	}
 
 	return utils.JsonSuccessResponse(c, "Application created", applications[0])
+}
+
+// guestAccessTTL is how long the set-password link emailed to a guest
+// applicant stays valid (longer than a normal reset: they may not open it today).
+const guestAccessTTL = 7 * 24 * time.Hour
+
+// createGuestAccount inserts the user and applicant profile for someone
+// applying without an account, inside the caller's transaction. The password is
+// random and never disclosed: the applicant sets their own through the emailed
+// link. When ok is false the error response has already been written.
+func (ac *ApplicationController) createGuestAccount(c *fiber.Ctx, tx pgx.Tx, profileID string, req model.NewApplicationPayload) (userID int, ok bool) {
+	ctx := context.Background()
+
+	secret, err := utils.SecureRandString(32)
+	if err != nil {
+		_ = ac.internalError(c, "Failed to create application", err)
+		return 0, false
+	}
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.DefaultCost)
+	if err != nil {
+		_ = ac.internalError(c, "Failed to create application", err)
+		return 0, false
+	}
+
+	nameEnc, nameHash, err := utils.EncryptAndHash(ctx, ac.DB, req.FullName)
+	if err != nil {
+		_ = ac.internalError(c, "Failed to encrypt data", err)
+		return 0, false
+	}
+	emailEnc, emailHash, err := utils.EncryptAndHash(ctx, ac.DB, req.Email)
+	if err != nil {
+		_ = ac.internalError(c, "Failed to encrypt data", err)
+		return 0, false
+	}
+	phoneEnc, phoneHash, err := utils.EncryptAndHash(ctx, ac.DB, req.Phone)
+	if err != nil {
+		_ = ac.internalError(c, "Failed to encrypt data", err)
+		return 0, false
+	}
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO users (full_name_encrypted, full_name_hash, email_encrypted, email_hash, phone_encrypted, phone_hash, password_hash, role)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'applicant')
+		RETURNING id
+	`, nameEnc, nameHash, emailEnc, emailHash, phoneEnc, phoneHash, string(passwordHash)).Scan(&userID)
+	if err != nil {
+		if isDup, _ := utils.IsErrDuplicate(err); isDup {
+			// Known error - email already registered, no logging. Applying under
+			// someone else's account without logging in is not allowed.
+			_ = utils.JsonErrorResponse(c, fiber.StatusConflict,
+				"An account with this email already exists. Please log in to apply.")
+			return 0, false
+		}
+		_ = ac.internalError(c, "Failed to create application", err)
+		return 0, false
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO applicant_profiles (id, user_id, full_name_encrypted, full_name_hash, email_encrypted, email_hash, phone_encrypted, phone_hash)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, profileID, userID, nameEnc, nameHash, emailEnc, emailHash, phoneEnc, phoneHash)
+	if err != nil {
+		_ = ac.internalError(c, "Failed to create application", err)
+		return 0, false
+	}
+	return userID, true
+}
+
+// sendGuestAccessEmail emails a new guest applicant a link to set their
+// password (the same single-use token the auth service's reset-password accepts)
+// so they can open the portal later. Failures are logged, never returned: the
+// application is already saved and they can always use "Forgot password".
+func (ac *ApplicationController) sendGuestAccessEmail(ctx context.Context, userID int, name, email string) {
+	token, err := utils.SecureRandString(32)
+	if err != nil {
+		fmt.Printf("WARNING: Failed to generate guest access token: %v\n", err)
+		return
+	}
+	if err := ac.Redis.Set(ctx, utils.PasswordResetKeyPrefix+token, strconv.Itoa(userID), guestAccessTTL).Err(); err != nil {
+		fmt.Printf("WARNING: Failed to store guest access token: %v\n", err)
+		return
+	}
+	if err := utils.PublishTemplatedEmailNotification(ctx, ac.Redis, email, "Set your password to track your application", "password_reset", map[string]any{
+		"name":       name,
+		"email":      email,
+		"reset_url":  utils.FrontendResetURL(ac.Config.WebURL, token),
+		"expires_in": "7 days",
+	}); err != nil {
+		fmt.Printf("WARNING: Failed to send guest access email: %v\n", err)
+	}
 }
 
 // UpdateStatus updates the status of an application (admin only)

@@ -82,9 +82,11 @@ func init() {
 	// token yields 401 and the admin-only route yields 403 for non-admins.
 	auth := middleware.AuthMiddleware(testJWTSecret)
 
-	applications := applicationTestApp.Group("/api/v1/applications", auth)
+	applications := applicationTestApp.Group("/api/v1/applications")
+	// Submitting is open to guests; registered before the auth middleware, as in routes/api.go.
+	applications.Post("/", middleware.OptionalAuthMiddleware(testJWTSecret), controller.Create)
+	applications.Use(auth)
 	applications.Get("/mine", controller.ListMine)
-	applications.Post("/", controller.Create)
 	applications.Get("/:id", controller.Get)
 	applications.Patch("/:id/status", controller.UpdateStatus, middleware.AdminMiddleware())
 	applications.Post("/:id/notes", controller.AddNote, middleware.AdminMiddleware())
@@ -281,10 +283,10 @@ func TestCreateApplicationRoute(t *testing.T) {
 		check      func(t *testing.T, body map[string]any)
 	}{
 		{
-			name:       "unauthorized - missing token",
+			name:       "guest without contact details is rejected",
 			headers:    nil,
 			payload:    validApplicationPayload(),
-			wantStatus: fiber.StatusUnauthorized,
+			wantStatus: fiber.StatusBadRequest,
 		},
 		{
 			name:       "validation - missing required fields",
@@ -857,7 +859,6 @@ func TestUnauthorizedAccess(t *testing.T) {
 		path   string
 	}{
 		{"GET", "/api/v1/applications/mine"},
-		{"POST", "/api/v1/applications/"},
 		{"GET", "/api/v1/applications/" + appID},
 		{"PATCH", "/api/v1/applications/" + appID + "/status"},
 		{"POST", "/api/v1/applications/" + appID + "/notes"},
@@ -1064,7 +1065,7 @@ func TestAvailabilityPaginationAndSeats(t *testing.T) {
 
 	status, body = doJSON(t, "GET", "/api/v1/sessions/bookings?limit=1000", nil, nil)
 	require.Equal(t, fiber.StatusOK, status)
-	assert.Equal(t, float64(100), body["meta"].(map[string]any)["limit"], "limit is capped at 100")
+	assert.Equal(t, float64(100), body["meta"].(map[string]any)["per_page"], "limit is capped at 100")
 
 	lastPage := (total + 99) / 100
 	status, body = doJSON(t, "GET", fmt.Sprintf("/api/v1/sessions/bookings?limit=100&page=%d", lastPage), nil, nil)
@@ -1199,4 +1200,56 @@ func seedNote(t *testing.T, appID, text string) {
 		INSERT INTO review_notes (id, application_id, author, text) VALUES ($1, $2, 'admin@example.com', $3)
 	`, uuid.New().String(), appID, text)
 	require.NoError(t, err)
+}
+
+// TestCreateApplicationAsGuest covers applying without logging in: the contact
+// details create the account, a second try with the same email is refused, and
+// a request that sends a bad token is never treated as a guest.
+func TestCreateApplicationAsGuest(t *testing.T) {
+	email := fmt.Sprintf("guest-%d@example.com", time.Now().UnixNano())
+	guestPayload := func() map[string]any {
+		payload := validApplicationPayload()
+		payload["full_name"] = "Guest Applicant"
+		payload["email"] = email
+		payload["phone"] = "+250788123456"
+		return payload
+	}
+
+	t.Run("missing contact details", func(t *testing.T) {
+		status, _ := doJSON(t, "POST", "/api/v1/applications/", validApplicationPayload(), nil)
+		assert.Equal(t, fiber.StatusBadRequest, status)
+	})
+
+	t.Run("documents need an account", func(t *testing.T) {
+		payload := guestPayload()
+		payload["document_ids"] = []string{uuid.New().String()}
+		status, _ := doJSON(t, "POST", "/api/v1/applications/", payload, nil)
+		assert.Equal(t, fiber.StatusBadRequest, status)
+	})
+
+	t.Run("creates the account and the application", func(t *testing.T) {
+		status, body := doJSON(t, "POST", "/api/v1/applications/", guestPayload(), nil)
+		require.Equal(t, fiber.StatusOK, status, "body: %v", body)
+
+		var users int
+		require.NoError(t, applicationTestDB.QueryRow(context.Background(),
+			`SELECT COUNT(id) FROM users WHERE email_hash = $1 AND role = 'applicant'`,
+			utils.HashData(email)).Scan(&users))
+		assert.Equal(t, 1, users, "a user is created immediately")
+
+		app, _ := body["data"].(map[string]any)
+		applicant, _ := app["applicant"].(map[string]any)
+		assert.Equal(t, email, applicant["email"])
+	})
+
+	t.Run("existing email is refused", func(t *testing.T) {
+		status, _ := doJSON(t, "POST", "/api/v1/applications/", guestPayload(), nil)
+		assert.Equal(t, fiber.StatusConflict, status)
+	})
+
+	t.Run("bad token is not a guest", func(t *testing.T) {
+		status, _ := doJSON(t, "POST", "/api/v1/applications/", guestPayload(),
+			map[string]string{"Authorization": "Bearer not-a-token"})
+		assert.Equal(t, fiber.StatusUnauthorized, status)
+	})
 }

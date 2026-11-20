@@ -46,3 +46,24 @@ type FileResponse struct {
 	SourceTableID string `json:"source_table_id,omitempty"`
 	Description   string `json:"description,omitempty"`
 }
+
+// GuestPresignedURLRequest is a presigned-URL request from someone applying
+// without an account. GuestToken is empty on the first upload (the response
+// carries a new one); later uploads send it back so the files stay together.
+type GuestPresignedURLRequest struct {
+	PresignedURLRequest
+	GuestToken string `json:"guest_token" validate:"omitempty,len=32,hexadecimal"`
+}
+
+// GuestPresignedURLResponse is the presigned-URL response plus the token the
+// guest must send with later uploads and with the application itself.
+type GuestPresignedURLResponse struct {
+	PresignedURLResponse
+	GuestToken string `json:"guest_token"`
+}
+
+// GuestConfirmUploadRequest confirms a guest's finished upload.
+type GuestConfirmUploadRequest struct {
+	FileID     string `json:"file_id" validate:"required,uuid"`
+	GuestToken string `json:"guest_token" validate:"required,len=32,hexadecimal"`
+}

@@ -95,7 +95,15 @@ recreate_postgres_test:
 		-p 5434:5432 \
 		-d postgres:17-alpine
 	@echo "Waiting for PostgreSQL test container to be ready..."
-	sleep 8
+	@# The image restarts itself once after initialising, so wait for it to accept
+	@# connections twice in a row instead of sleeping a fixed time.
+	@for i in $$(seq 1 60); do \
+		if docker exec qonics-postgres-test pg_isready -U postgres -d qonics_test_db >/dev/null 2>&1; then \
+			sleep 2; \
+			if docker exec qonics-postgres-test pg_isready -U postgres -d qonics_test_db >/dev/null 2>&1; then break; fi; \
+		fi; \
+		sleep 1; \
+	done
 	@echo "PostgreSQL test container recreated!"
 
 ## test_db: Run migrations on test database

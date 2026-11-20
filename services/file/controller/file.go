@@ -54,9 +54,6 @@ func (fc *FileController) GetPresignedURL(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusUnauthorized, "Unauthorized")
 	}
 
-	ctx := context.Background()
-
-	// Parse request
 	request := new(model.PresignedURLRequest)
 	if err := c.BodyParser(request); err != nil {
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid request format")
@@ -66,46 +63,76 @@ func (fc *FileController) GetPresignedURL(c *fiber.Ctx) error {
 		return utils.JsonValidationErrorResponse(c, err)
 	}
 
+	resp, done := fc.createPendingUpload(c, request, ownerID(user), user.IsAdmin())
+	if !done {
+		return nil // the error response is already written
+	}
+
+	// Record the upload request in the audit trail (leazi-style activity log).
+	utils.RecordSuccessActivityLog(c, fc.DB, utils.CurrentUserID(c), "FILE_PRESIGNED_URL",
+		fmt.Sprintf("Requested upload URL for %s", request.FileName),
+		map[string]any{"file_id": resp.FileID, "file_name": request.FileName})
+
+	// Return presigned URL and temporary file ID
+	return c.JSON(fiber.Map{
+		"status":  fiber.StatusOK,
+		"message": "Presigned URL generated successfully",
+		"data":    resp,
+	})
+}
+
+// createPendingUpload validates the file's extension, enforces the intake
+// window (admins excepted), presigns the upload and stores the pending file
+// record for owner. When done is false the error response has already been
+// written to c.
+func (fc *FileController) createPendingUpload(c *fiber.Ctx, request *model.PresignedURLRequest, owner string, isAdmin bool) (resp model.PresignedURLResponse, done bool) {
+	ctx := context.Background()
+
 	// Only document formats are accepted; the stored object keeps this extension.
 	ext := strings.ToLower(filepath.Ext(request.FileName))
 	if !slices.Contains(model.AllowedUploadExtensions, ext) {
-		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Only PDF, DOC and DOCX files can be uploaded")
+		_ = utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Only PDF, DOC and DOCX files can be uploaded")
+		return resp, false
 	}
 
 	// Documents are only uploaded to go with a new application, so refuse them
 	// while intake is closed instead of storing files that can never be used.
-	if !user.IsAdmin() {
+	if !isAdmin {
 		intake, err := utils.GetIntakeStatus(ctx, fc.DB)
 		if err != nil {
-			return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to load application settings", utils.Logger{
+			_ = utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to load application settings", utils.Logger{
 				LogLevel:    utils.CRITICAL,
-				Message:     fmt.Sprintf("GetPresignedURL: Failed to load intake settings: %v", err),
+				Message:     fmt.Sprintf("createPendingUpload: Failed to load intake settings: %v", err),
 				ServiceName: fc.Config.ServiceName,
 			})
+			return resp, false
 		}
 		if !intake.Open {
-			return utils.JsonErrorResponse(c, fiber.StatusForbidden, intake.Message)
+			_ = utils.JsonErrorResponse(c, fiber.StatusForbidden, intake.Message)
+			return resp, false
 		}
 	}
 
 	// Initialize R2 client
 	r2Client, err := helper.R2ClientFactory()
 	if err != nil {
-		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to initialize storage client", utils.Logger{
+		_ = utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to initialize storage client", utils.Logger{
 			LogLevel:    utils.CRITICAL,
-			Message:     fmt.Sprintf("GetPresignedURL: Failed to initialize R2 client: %v", err),
+			Message:     fmt.Sprintf("createPendingUpload: Failed to initialize R2 client: %v", err),
 			ServiceName: fc.Config.ServiceName,
 		})
+		return resp, false
 	}
 
 	// Generate presigned URL
 	presignedURL, objectKey, err := r2Client.GeneratePresignedURL(request.FileName, request.FileType)
 	if err != nil {
-		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to generate presigned URL", utils.Logger{
+		_ = utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to generate presigned URL", utils.Logger{
 			LogLevel:    utils.CRITICAL,
-			Message:     fmt.Sprintf("GetPresignedURL: Failed to generate presigned URL: %v", err),
+			Message:     fmt.Sprintf("createPendingUpload: Failed to generate presigned URL: %v", err),
 			ServiceName: fc.Config.ServiceName,
 		})
+		return resp, false
 	}
 
 	// Create a pending file record. deleted_at in the future flags it as
@@ -115,32 +142,22 @@ func (fc *FileController) GetPresignedURL(c *fiber.Ctx) error {
 	_, err = fc.DB.Exec(ctx, `
 		INSERT INTO files (id, owner_id, owner_type, name, file_path, file_type, file_size, description, deleted_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`, fileID, ownerID(user), "user", request.FileName, objectKey, request.FileType, request.FileSize, request.Description, time.Now().Add(pendingTTL))
-
+	`, fileID, owner, "user", request.FileName, objectKey, request.FileType, request.FileSize, request.Description, time.Now().Add(pendingTTL))
 	if err != nil {
-		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to create file record", utils.Logger{
+		_ = utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to create file record", utils.Logger{
 			LogLevel:    utils.CRITICAL,
-			Message:     fmt.Sprintf("GetPresignedURL: Failed to create file record: %v", err),
+			Message:     fmt.Sprintf("createPendingUpload: Failed to create file record: %v", err),
 			ServiceName: fc.Config.ServiceName,
 		})
+		return resp, false
 	}
 
-	// Record the upload request in the audit trail (leazi-style activity log).
-	utils.RecordSuccessActivityLog(c, fc.DB, utils.CurrentUserID(c), "FILE_PRESIGNED_URL",
-		fmt.Sprintf("Requested upload URL for %s", request.FileName),
-		map[string]any{"file_id": fileID, "file_name": request.FileName})
-
-	// Return presigned URL and temporary file ID
-	return c.JSON(fiber.Map{
-		"status":  fiber.StatusOK,
-		"message": "Presigned URL generated successfully",
-		"data": model.PresignedURLResponse{
-			PresignedURL: presignedURL,
-			FileID:       fileID,
-			ObjectKey:    objectKey,
-			ExpiresIn:    900, // 15 minutes in seconds
-		},
-	})
+	return model.PresignedURLResponse{
+		PresignedURL: presignedURL,
+		FileID:       fileID,
+		ObjectKey:    objectKey,
+		ExpiresIn:    900, // 15 minutes in seconds
+	}, true
 }
 
 // ConfirmFileUpload confirms a successful upload: it verifies the caller owns

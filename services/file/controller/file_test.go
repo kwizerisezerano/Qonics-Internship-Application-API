@@ -79,7 +79,10 @@ func init() {
 
 	// Mirror routes/api.go with the real auth middleware.
 	auth := middleware.AuthMiddleware(testJWTSecret)
-	files := fileTestApp.Group("/api/v1/files", auth)
+	files := fileTestApp.Group("/api/v1/files")
+	files.Post("/guest/presigned-url", controller.GuestPresignedURL)
+	files.Post("/guest/confirm-upload", controller.GuestConfirmUpload)
+	files.Use(auth)
 	files.Post("/presigned-url", controller.GetPresignedURL)
 	files.Post("/confirm-upload", controller.ConfirmFileUpload)
 	files.Get("/:file_id/url", controller.GetFileURL)
@@ -576,4 +579,71 @@ func seedApplicantWithApplication(t *testing.T) (int, string) {
 	require.NoError(t, err)
 
 	return userID, appID
+}
+
+// TestGuestUploadFlow covers uploading documents without an account: the first
+// request mints a token, the files are owned by a hash of it, confirming keeps
+// the pending expiry (so unclaimed files are cleaned up), and nobody else can
+// confirm them.
+func TestGuestUploadFlow(t *testing.T) {
+	ctx := context.Background()
+
+	status, body := doJSON(t, "POST", "/api/v1/files/guest/presigned-url", validPresignedPayload(), nil)
+	require.Equal(t, fiber.StatusOK, status, "body: %v", body)
+	data := body["data"].(map[string]any)
+	token := data["guest_token"].(string)
+	fileID := data["file_id"].(string)
+	require.True(t, utils.ValidGuestUploadToken(token), "a valid token is issued")
+
+	var owner string
+	require.NoError(t, fileTestDB.QueryRow(ctx, `SELECT owner_id FROM files WHERE id = $1`, fileID).Scan(&owner))
+	assert.Equal(t, utils.GuestUploadOwner(token), owner)
+	assert.NotContains(t, owner, token, "the token itself is never stored")
+
+	t.Run("wrong token cannot confirm", func(t *testing.T) {
+		other := "00000000000000000000000000000000"
+		status, _ := doJSON(t, "POST", "/api/v1/files/guest/confirm-upload",
+			map[string]any{"file_id": fileID, "guest_token": other}, nil)
+		assert.Equal(t, fiber.StatusNotFound, status)
+	})
+
+	t.Run("confirm keeps the pending expiry", func(t *testing.T) {
+		status, body := doJSON(t, "POST", "/api/v1/files/guest/confirm-upload",
+			map[string]any{"file_id": fileID, "guest_token": token}, nil)
+		require.Equal(t, fiber.StatusOK, status, "body: %v", body)
+
+		var uploaded, pending bool
+		require.NoError(t, fileTestDB.QueryRow(ctx,
+			`SELECT uploaded_at IS NOT NULL, deleted_at > NOW() FROM files WHERE id = $1`, fileID).Scan(&uploaded, &pending))
+		assert.True(t, uploaded)
+		assert.True(t, pending, "unclaimed guest files stay on the cleanup clock")
+
+		status, _ = doJSON(t, "POST", "/api/v1/files/guest/confirm-upload",
+			map[string]any{"file_id": fileID, "guest_token": token}, nil)
+		assert.Equal(t, fiber.StatusNotFound, status, "a second confirm is refused")
+	})
+
+	t.Run("the same token keeps adding files, up to the cap", func(t *testing.T) {
+		payload := validPresignedPayload()
+		payload["guest_token"] = token
+		for i := 1; i < utils.MaxGuestFiles; i++ {
+			status, body := doJSON(t, "POST", "/api/v1/files/guest/presigned-url", payload, nil)
+			require.Equal(t, fiber.StatusOK, status, "upload %d: %v", i+1, body)
+			assert.Equal(t, token, body["data"].(map[string]any)["guest_token"])
+		}
+		status, _ := doJSON(t, "POST", "/api/v1/files/guest/presigned-url", payload, nil)
+		assert.Equal(t, fiber.StatusBadRequest, status, "over the cap")
+	})
+
+	t.Run("validation", func(t *testing.T) {
+		bad := validPresignedPayload()
+		bad["file_name"] = "virus.exe"
+		status, _ := doJSON(t, "POST", "/api/v1/files/guest/presigned-url", bad, nil)
+		assert.Equal(t, fiber.StatusBadRequest, status, "only documents")
+
+		bad = validPresignedPayload()
+		bad["guest_token"] = "not-a-token"
+		status, _ = doJSON(t, "POST", "/api/v1/files/guest/presigned-url", bad, nil)
+		assert.Equal(t, fiber.StatusBadRequest, status, "malformed token")
+	})
 }

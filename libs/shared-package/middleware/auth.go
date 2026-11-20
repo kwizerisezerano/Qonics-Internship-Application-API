@@ -58,6 +58,20 @@ func AuthMiddleware(jwtSecret string) fiber.Handler {
 	}
 }
 
+// OptionalAuthMiddleware lets guests through: with no Authorization header the
+// request continues anonymously (handlers see GetUserPayload ok == false). A
+// header that is present must still be a valid Bearer token, so a stale or
+// forged token is rejected instead of silently treated as a guest.
+func OptionalAuthMiddleware(jwtSecret string) fiber.Handler {
+	required := AuthMiddleware(jwtSecret)
+	return func(c *fiber.Ctx) error {
+		if c.Get("Authorization") == "" {
+			return c.Next()
+		}
+		return required(c)
+	}
+}
+
 // AdminMiddleware checks if user has admin role
 func AdminMiddleware() fiber.Handler {
 	return func(c *fiber.Ctx) error {

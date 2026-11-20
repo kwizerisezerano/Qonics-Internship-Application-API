@@ -9,12 +9,17 @@ import (
 func SetupRoutes(app *fiber.App, applicationController *controller.ApplicationController, jwtSecret string) {
 	api := app.Group("/api/v1")
 
-	// Application routes (authenticated)
 	applications := api.Group("/applications")
+
+	// Submitting is open to guests: without a token the applicant's name, email
+	// and phone in the body create their account. Registered before the auth
+	// middleware below so it is not subject to it.
+	applications.Post("/", middleware.OptionalAuthMiddleware(jwtSecret), applicationController.Create)
+
+	// Everything else (authenticated)
 	applications.Use(middleware.AuthMiddleware(jwtSecret))
 
 	applications.Get("/mine", applicationController.ListMine)
-	applications.Post("/", applicationController.Create)
 	applications.Get("/:id", applicationController.Get)
 	applications.Patch("/:id/status", applicationController.UpdateStatus, middleware.AdminMiddleware())
 	applications.Post("/:id/notes", applicationController.AddNote, middleware.AdminMiddleware())
