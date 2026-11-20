@@ -79,7 +79,10 @@ func init() {
 
 	// Mirror routes/api.go with the real auth middleware.
 	auth := middleware.AuthMiddleware(testJWTSecret)
-	files := fileTestApp.Group("/api/v1/files", auth)
+	files := fileTestApp.Group("/api/v1/files")
+	files.Post("/guest/presigned-url", controller.GuestPresignedURL)
+	files.Post("/guest/confirm-upload", controller.GuestConfirmUpload)
+	files.Use(auth)
 	files.Post("/presigned-url", controller.GetPresignedURL)
 	files.Post("/confirm-upload", controller.ConfirmFileUpload)
 	files.Get("/:file_id/url", controller.GetFileURL)
@@ -242,6 +245,36 @@ func TestGetPresignedURLRoute(t *testing.T) {
 			},
 		},
 		{
+			name:       "validation - unknown document type",
+			headers:    auth,
+			payload:    withField("file_type", "selfie"),
+			wantStatus: fiber.StatusBadRequest,
+			check: func(t *testing.T, body map[string]any) {
+				assert.True(t, hasValidationError(body, "file_type"), "expected file_type error: %v", body)
+			},
+		},
+		{
+			name:       "validation - file larger than 5 MB",
+			headers:    auth,
+			payload:    withField("file_size", 5*1024*1024+1),
+			wantStatus: fiber.StatusBadRequest,
+			check: func(t *testing.T, body map[string]any) {
+				assert.True(t, hasValidationError(body, "file_size"), "expected file_size error: %v", body)
+			},
+		},
+		{
+			name:       "bad request - disallowed extension",
+			headers:    auth,
+			payload:    withField("file_name", "page.html"),
+			wantStatus: fiber.StatusBadRequest,
+		},
+		{
+			name:       "success - uppercase extension accepted",
+			headers:    auth,
+			payload:    withField("file_name", "CV.PDF"),
+			wantStatus: fiber.StatusOK,
+		},
+		{
 			name:       "success - returns presigned url and pending file id",
 			headers:    auth,
 			payload:    validPresignedPayload(),
@@ -270,15 +303,15 @@ func TestGetPresignedURLRoute(t *testing.T) {
 
 // TestConfirmFileUploadRoute covers POST /api/v1/files/confirm-upload.
 func TestConfirmFileUploadRoute(t *testing.T) {
-	const owner = 5151
+	owner, sourceID := seedApplicantWithApplication(t)
+	_, someoneElsesApp := seedApplicantWithApplication(t)
 	auth := authHeaders(owner, "applicant")
 
 	pending := seedFile(t, owner, true)
 	confirmed := seedFile(t, owner, false)
 	otherPending := seedFile(t, 6161, true)
 	successPending := seedFile(t, owner, true)
-
-	sourceID := "app-" + uniqueSuffix()
+	hijackPending := seedFile(t, owner, true)
 
 	tests := []struct {
 		name       string
@@ -337,6 +370,16 @@ func TestConfirmFileUploadRoute(t *testing.T) {
 			headers:    auth,
 			payload:    map[string]any{"file_id": confirmed},
 			wantStatus: fiber.StatusConflict,
+		},
+		{
+			name:    "forbidden - attach to another applicant's application",
+			headers: auth,
+			payload: map[string]any{
+				"file_id":         hijackPending,
+				"source_table":    "applications",
+				"source_table_id": someoneElsesApp,
+			},
+			wantStatus: fiber.StatusForbidden,
 		},
 		{
 			name:    "success - confirms upload and attaches source",
@@ -468,4 +511,139 @@ func TestUnauthorizedAccess(t *testing.T) {
 			assert.Equal(t, fiber.StatusUnauthorized, status)
 		})
 	}
+}
+
+// TestPresignedURLRefusedWhileIntakeClosed: applicants can't upload documents
+// while applications are closed (they could never be attached); admins can.
+func TestPresignedURLRefusedWhileIntakeClosed(t *testing.T) {
+	ctx := context.Background()
+	setOpen := func(open bool, message string) {
+		t.Helper()
+		_, err := fileTestDB.Exec(ctx, `
+			INSERT INTO settings (id, applications_open, close_on, closure_message)
+			VALUES (1, $1, NULL, $2)
+			ON CONFLICT (id) DO UPDATE SET applications_open = $1, close_on = NULL, closure_message = $2
+		`, open, message)
+		require.NoError(t, err)
+	}
+	t.Cleanup(func() { setOpen(true, "") })
+
+	setOpen(false, "Back in January")
+	status, body := doJSON(t, "POST", "/api/v1/files/presigned-url", validPresignedPayload(), authHeaders(4243, "applicant"))
+	assert.Equal(t, fiber.StatusForbidden, status, "body: %v", body)
+	assert.Equal(t, "Back in January", body["message"])
+
+	status, body = doJSON(t, "POST", "/api/v1/files/presigned-url", validPresignedPayload(), authHeaders(1, "admin"))
+	assert.Equal(t, fiber.StatusOK, status, "admins are not blocked: %v", body)
+
+	setOpen(true, "")
+	status, body = doJSON(t, "POST", "/api/v1/files/presigned-url", validPresignedPayload(), authHeaders(4243, "applicant"))
+	assert.Equal(t, fiber.StatusOK, status, "open again: %v", body)
+}
+
+// seedApplicantWithApplication creates an applicant user, their profile and one
+// application, returning the user id and the application id.
+func seedApplicantWithApplication(t *testing.T) (int, string) {
+	t.Helper()
+	ctx := context.Background()
+	suffix := uniqueSuffix()
+	email := "file-owner-" + suffix + "@example.com"
+
+	var userID int
+	err := fileTestDB.QueryRow(ctx, `
+		INSERT INTO users (full_name_encrypted, full_name_hash, email_encrypted, email_hash,
+			phone_encrypted, phone_hash, password_hash, role)
+		VALUES (pgp_sym_encrypt('File Owner', 'secret'), $1, pgp_sym_encrypt($2, 'secret'), $3,
+			pgp_sym_encrypt('+250788000000', 'secret'), $4, 'not-a-real-hash', 'applicant')
+		RETURNING id
+	`, "name-"+suffix, email, "email-"+suffix, "phone-"+suffix).Scan(&userID)
+	require.NoError(t, err)
+
+	profileID := uuid.New().String()
+	_, err = fileTestDB.Exec(ctx, `
+		INSERT INTO applicant_profiles (id, user_id, full_name_encrypted, full_name_hash,
+			email_encrypted, email_hash, phone_encrypted, phone_hash)
+		SELECT $1, id, full_name_encrypted, full_name_hash, email_encrypted, email_hash,
+			phone_encrypted, phone_hash
+		FROM users WHERE id = $2
+	`, profileID, userID)
+	require.NoError(t, err)
+
+	appID := uuid.New().String()
+	_, err = fileTestDB.Exec(ctx, `
+		INSERT INTO applications (id, reference, applicant_id, department, specialization,
+			motivation, experience, education_level, session, duration_months, work_mode, status)
+		VALUES ($1, $2, $3, 'software', 'backend', 'Build things', '2 years',
+			'university', 'morning', 6, 'remote', 'submitted')
+	`, appID, "APP-"+suffix, profileID)
+	require.NoError(t, err)
+
+	return userID, appID
+}
+
+// TestGuestUploadFlow covers uploading documents without an account: the first
+// request mints a token, the files are owned by a hash of it, confirming keeps
+// the pending expiry (so unclaimed files are cleaned up), and nobody else can
+// confirm them.
+func TestGuestUploadFlow(t *testing.T) {
+	ctx := context.Background()
+
+	status, body := doJSON(t, "POST", "/api/v1/files/guest/presigned-url", validPresignedPayload(), nil)
+	require.Equal(t, fiber.StatusOK, status, "body: %v", body)
+	data := body["data"].(map[string]any)
+	token := data["guest_token"].(string)
+	fileID := data["file_id"].(string)
+	require.True(t, utils.ValidGuestUploadToken(token), "a valid token is issued")
+
+	var owner string
+	require.NoError(t, fileTestDB.QueryRow(ctx, `SELECT owner_id FROM files WHERE id = $1`, fileID).Scan(&owner))
+	assert.Equal(t, utils.GuestUploadOwner(token), owner)
+	assert.NotContains(t, owner, token, "the token itself is never stored")
+
+	t.Run("wrong token cannot confirm", func(t *testing.T) {
+		other := "00000000000000000000000000000000"
+		status, _ := doJSON(t, "POST", "/api/v1/files/guest/confirm-upload",
+			map[string]any{"file_id": fileID, "guest_token": other}, nil)
+		assert.Equal(t, fiber.StatusNotFound, status)
+	})
+
+	t.Run("confirm keeps the pending expiry", func(t *testing.T) {
+		status, body := doJSON(t, "POST", "/api/v1/files/guest/confirm-upload",
+			map[string]any{"file_id": fileID, "guest_token": token}, nil)
+		require.Equal(t, fiber.StatusOK, status, "body: %v", body)
+
+		var uploaded, pending bool
+		require.NoError(t, fileTestDB.QueryRow(ctx,
+			`SELECT uploaded_at IS NOT NULL, deleted_at > NOW() FROM files WHERE id = $1`, fileID).Scan(&uploaded, &pending))
+		assert.True(t, uploaded)
+		assert.True(t, pending, "unclaimed guest files stay on the cleanup clock")
+
+		status, _ = doJSON(t, "POST", "/api/v1/files/guest/confirm-upload",
+			map[string]any{"file_id": fileID, "guest_token": token}, nil)
+		assert.Equal(t, fiber.StatusNotFound, status, "a second confirm is refused")
+	})
+
+	t.Run("the same token keeps adding files, up to the cap", func(t *testing.T) {
+		payload := validPresignedPayload()
+		payload["guest_token"] = token
+		for i := 1; i < utils.MaxGuestFiles; i++ {
+			status, body := doJSON(t, "POST", "/api/v1/files/guest/presigned-url", payload, nil)
+			require.Equal(t, fiber.StatusOK, status, "upload %d: %v", i+1, body)
+			assert.Equal(t, token, body["data"].(map[string]any)["guest_token"])
+		}
+		status, _ := doJSON(t, "POST", "/api/v1/files/guest/presigned-url", payload, nil)
+		assert.Equal(t, fiber.StatusBadRequest, status, "over the cap")
+	})
+
+	t.Run("validation", func(t *testing.T) {
+		bad := validPresignedPayload()
+		bad["file_name"] = "virus.exe"
+		status, _ := doJSON(t, "POST", "/api/v1/files/guest/presigned-url", bad, nil)
+		assert.Equal(t, fiber.StatusBadRequest, status, "only documents")
+
+		bad = validPresignedPayload()
+		bad["guest_token"] = "not-a-token"
+		status, _ = doJSON(t, "POST", "/api/v1/files/guest/presigned-url", bad, nil)
+		assert.Equal(t, fiber.StatusBadRequest, status, "malformed token")
+	})
 }

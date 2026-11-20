@@ -3,6 +3,10 @@ package controller
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -36,23 +40,20 @@ func NewFileController(db *pgxpool.Pool, cfg *config.Config) *FileController {
 	}
 }
 
-// ownerID returns the current user id as a string, used as the file owner.
-func ownerID(c *fiber.Ctx) string {
-	return fmt.Sprintf("%v", c.Locals("user_id"))
+// ownerID returns the caller's user id as a string, used as the file owner.
+func ownerID(user utils.UserPayload) string {
+	return strconv.Itoa(user.ID)
 }
 
 // GetPresignedURL handles requests for generating presigned URLs for file uploads.
 // It creates a "pending" file record whose deleted_at is set in the future; the
 // record becomes permanent once ConfirmFileUpload clears it.
 func (fc *FileController) GetPresignedURL(c *fiber.Ctx) error {
-	userID := c.Locals("user_id")
-	if userID == nil {
+	user, ok := utils.GetUserPayload(c)
+	if !ok {
 		return utils.JsonErrorResponse(c, fiber.StatusUnauthorized, "Unauthorized")
 	}
 
-	ctx := context.Background()
-
-	// Parse request
 	request := new(model.PresignedURLRequest)
 	if err := c.BodyParser(request); err != nil {
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid request format")
@@ -62,24 +63,76 @@ func (fc *FileController) GetPresignedURL(c *fiber.Ctx) error {
 		return utils.JsonValidationErrorResponse(c, err)
 	}
 
+	resp, done := fc.createPendingUpload(c, request, ownerID(user), user.IsAdmin())
+	if !done {
+		return nil // the error response is already written
+	}
+
+	// Record the upload request in the audit trail (leazi-style activity log).
+	utils.RecordSuccessActivityLog(c, fc.DB, utils.CurrentUserID(c), "FILE_PRESIGNED_URL",
+		fmt.Sprintf("Requested upload URL for %s", request.FileName),
+		map[string]any{"file_id": resp.FileID, "file_name": request.FileName})
+
+	// Return presigned URL and temporary file ID
+	return c.JSON(fiber.Map{
+		"status":  fiber.StatusOK,
+		"message": "Presigned URL generated successfully",
+		"data":    resp,
+	})
+}
+
+// createPendingUpload validates the file's extension, enforces the intake
+// window (admins excepted), presigns the upload and stores the pending file
+// record for owner. When done is false the error response has already been
+// written to c.
+func (fc *FileController) createPendingUpload(c *fiber.Ctx, request *model.PresignedURLRequest, owner string, isAdmin bool) (resp model.PresignedURLResponse, done bool) {
+	ctx := context.Background()
+
+	// Only document formats are accepted; the stored object keeps this extension.
+	ext := strings.ToLower(filepath.Ext(request.FileName))
+	if !slices.Contains(model.AllowedUploadExtensions, ext) {
+		_ = utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Only PDF, DOC and DOCX files can be uploaded")
+		return resp, false
+	}
+
+	// Documents are only uploaded to go with a new application, so refuse them
+	// while intake is closed instead of storing files that can never be used.
+	if !isAdmin {
+		intake, err := utils.GetIntakeStatus(ctx, fc.DB)
+		if err != nil {
+			_ = utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to load application settings", utils.Logger{
+				LogLevel:    utils.CRITICAL,
+				Message:     fmt.Sprintf("createPendingUpload: Failed to load intake settings: %v", err),
+				ServiceName: fc.Config.ServiceName,
+			})
+			return resp, false
+		}
+		if !intake.Open {
+			_ = utils.JsonErrorResponse(c, fiber.StatusForbidden, intake.Message)
+			return resp, false
+		}
+	}
+
 	// Initialize R2 client
 	r2Client, err := helper.R2ClientFactory()
 	if err != nil {
-		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to initialize storage client", utils.Logger{
+		_ = utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to initialize storage client", utils.Logger{
 			LogLevel:    utils.CRITICAL,
-			Message:     fmt.Sprintf("GetPresignedURL: Failed to initialize R2 client: %v", err),
+			Message:     fmt.Sprintf("createPendingUpload: Failed to initialize R2 client: %v", err),
 			ServiceName: fc.Config.ServiceName,
 		})
+		return resp, false
 	}
 
 	// Generate presigned URL
 	presignedURL, objectKey, err := r2Client.GeneratePresignedURL(request.FileName, request.FileType)
 	if err != nil {
-		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to generate presigned URL", utils.Logger{
+		_ = utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to generate presigned URL", utils.Logger{
 			LogLevel:    utils.CRITICAL,
-			Message:     fmt.Sprintf("GetPresignedURL: Failed to generate presigned URL: %v", err),
+			Message:     fmt.Sprintf("createPendingUpload: Failed to generate presigned URL: %v", err),
 			ServiceName: fc.Config.ServiceName,
 		})
+		return resp, false
 	}
 
 	// Create a pending file record. deleted_at in the future flags it as
@@ -89,32 +142,22 @@ func (fc *FileController) GetPresignedURL(c *fiber.Ctx) error {
 	_, err = fc.DB.Exec(ctx, `
 		INSERT INTO files (id, owner_id, owner_type, name, file_path, file_type, file_size, description, deleted_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`, fileID, ownerID(c), "user", request.FileName, objectKey, request.FileType, request.FileSize, request.Description, time.Now().Add(pendingTTL))
-
+	`, fileID, owner, "user", request.FileName, objectKey, request.FileType, request.FileSize, request.Description, time.Now().Add(pendingTTL))
 	if err != nil {
-		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to create file record", utils.Logger{
+		_ = utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to create file record", utils.Logger{
 			LogLevel:    utils.CRITICAL,
-			Message:     fmt.Sprintf("GetPresignedURL: Failed to create file record: %v", err),
+			Message:     fmt.Sprintf("createPendingUpload: Failed to create file record: %v", err),
 			ServiceName: fc.Config.ServiceName,
 		})
+		return resp, false
 	}
 
-	// Record the upload request in the audit trail (leazi-style activity log).
-	utils.RecordSuccessActivityLog(c, fc.DB, utils.CurrentUserID(c), "FILE_PRESIGNED_URL",
-		fmt.Sprintf("Requested upload URL for %s", request.FileName),
-		map[string]any{"file_id": fileID, "file_name": request.FileName})
-
-	// Return presigned URL and temporary file ID
-	return c.JSON(fiber.Map{
-		"status":  fiber.StatusOK,
-		"message": "Presigned URL generated successfully",
-		"data": model.PresignedURLResponse{
-			PresignedURL: presignedURL,
-			FileID:       fileID,
-			ObjectKey:    objectKey,
-			ExpiresIn:    900, // 15 minutes in seconds
-		},
-	})
+	return model.PresignedURLResponse{
+		PresignedURL: presignedURL,
+		FileID:       fileID,
+		ObjectKey:    objectKey,
+		ExpiresIn:    900, // 15 minutes in seconds
+	}, true
 }
 
 // ConfirmFileUpload confirms a successful upload: it verifies the caller owns
@@ -122,8 +165,8 @@ func (fc *FileController) GetPresignedURL(c *fiber.Ctx) error {
 // provided, attaches the file to its owning record via the generic
 // source_table / source_table_id pair plus extra metadata.
 func (fc *FileController) ConfirmFileUpload(c *fiber.Ctx) error {
-	userID := c.Locals("user_id")
-	if userID == nil {
+	user, ok := utils.GetUserPayload(c)
+	if !ok {
 		return utils.JsonErrorResponse(c, fiber.StatusUnauthorized, "Unauthorized")
 	}
 
@@ -171,7 +214,7 @@ func (fc *FileController) ConfirmFileUpload(c *fiber.Ctx) error {
 	}
 
 	// Confirm the file belongs to the caller (leazi-style ownership check).
-	if fileOwner == "" || fileOwner != ownerID(c) {
+	if fileOwner == "" || fileOwner != ownerID(user) {
 		return utils.JsonErrorResponse(c, fiber.StatusForbidden, "File ownership mismatch")
 	}
 
@@ -180,9 +223,25 @@ func (fc *FileController) ConfirmFileUpload(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusConflict, "File already confirmed")
 	}
 
+	// A file may only be attached to a record the caller owns (admins excepted),
+	// otherwise anyone could add documents to someone else's application.
+	if request.SourceTable != "" && !user.IsAdmin() {
+		owns, err := fc.ownsSourceRecord(ctx, request.SourceTable, request.SourceTableID, ownerID(user))
+		if err != nil {
+			return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to verify attachment target", utils.Logger{
+				LogLevel:    utils.CRITICAL,
+				Message:     fmt.Sprintf("ConfirmFileUpload: Failed to verify source record: %v", err),
+				ServiceName: fc.Config.ServiceName,
+			})
+		}
+		if !owns {
+			return utils.JsonErrorResponse(c, fiber.StatusForbidden, "You can only attach files to your own records")
+		}
+	}
+
 	// Attach to owner (optional) and clear the pending marker, returning the
 	// final record so the confirm payload mirrors leazi's file response.
-	var extraArg interface{}
+	var extraArg any
 	if request.Extra != nil {
 		extraArg = request.Extra
 	}
@@ -200,7 +259,7 @@ func (fc *FileController) ConfirmFileUpload(c *fiber.Ctx) error {
 		RETURNING id, name, file_path, file_type, file_size,
 		          COALESCE(source_table, ''), COALESCE(source_table_id, ''),
 		          COALESCE(description, '')
-	`, request.SourceTable, request.SourceTableID, request.Description, extraArg, request.FileID, ownerID(c)).Scan(
+	`, request.SourceTable, request.SourceTableID, request.Description, extraArg, request.FileID, ownerID(user)).Scan(
 		&file.ID, &file.Name, &file.FilePath, &file.FileType, &file.FileSize,
 		&file.SourceTable, &file.SourceTableID, &file.Description,
 	)
@@ -242,8 +301,8 @@ func (fc *FileController) ConfirmFileUpload(c *fiber.Ctx) error {
 
 // GetFileURL returns a short-lived presigned URL to download a file.
 func (fc *FileController) GetFileURL(c *fiber.Ctx) error {
-	userID := c.Locals("user_id")
-	if userID == nil {
+	user, ok := utils.GetUserPayload(c)
+	if !ok {
 		return utils.JsonErrorResponse(c, fiber.StatusUnauthorized, "Unauthorized")
 	}
 
@@ -267,7 +326,7 @@ func (fc *FileController) GetFileURL(c *fiber.Ctx) error {
 	}
 
 	// Owners can read their own files; admins can read any file.
-	if c.Locals("role") != "admin" && fileOwner != ownerID(c) {
+	if !user.IsAdmin() && fileOwner != ownerID(user) {
 		return utils.JsonErrorResponse(c, fiber.StatusForbidden, "Forbidden")
 	}
 
@@ -293,4 +352,24 @@ func (fc *FileController) GetFileURL(c *fiber.Ctx) error {
 		"file_id": fileID,
 		"url":     url,
 	})
+}
+
+// ownsSourceRecord reports whether the user owns the record a file is being
+// attached to. Every table in utils.AvailableSourceTable needs a case here;
+// unknown tables are treated as not owned.
+func (fc *FileController) ownsSourceRecord(ctx context.Context, sourceTable, sourceID, userID string) (bool, error) {
+	var owns bool
+	switch sourceTable {
+	case "applications":
+		err := fc.DB.QueryRow(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM applications a
+				JOIN applicant_profiles ap ON a.applicant_id = ap.id
+				WHERE a.id::text = $1 AND ap.user_id::text = $2
+			)
+		`, sourceID, userID).Scan(&owns)
+		return owns, err
+	default:
+		return false, nil
+	}
 }

@@ -32,6 +32,11 @@ func SetupRoutes(app *fiber.App, applicantController *controller.ApplicantContro
 
 	activityLogs.Get("/", applicantController.ListActivityLogs)
 
+	// Public intake status (no login). Registered before the admin settings
+	// group below: Fiber runs handlers in registration order, so this route
+	// answers before that group's auth/admin middleware is reached.
+	api.Get("/settings/public", applicantController.GetPublicSettings)
+
 	// Settings routes (admin)
 	settings := api.Group("/settings")
 	settings.Use(middleware.AuthMiddleware(jwtSecret))

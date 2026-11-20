@@ -814,8 +814,23 @@ paths:
       tags:
         - Applications
       summary: Create application
-      description: Create a new application with document uploads
+      description: |
+        Create a new application. Open to guests: without a bearer token the body
+        must also carry `full_name`, `email` and `phone`; the account is created
+        immediately and an email with a link to set a password is sent so the
+        applicant can open the portal later. If the email already has an account
+        the call answers 409 and asks them to log in. Logged-in applicants apply
+        under their own account as before.
+
+        Guests can attach documents: upload each file first with
+        `POST /files/guest/presigned-url` (no token needed; the first response
+        returns a `guest_token`, send it back with later uploads, max 5 files),
+        PUT the file to the returned URL, confirm it with
+        `POST /files/guest/confirm-upload` (`file_id` + `guest_token`), then send
+        the confirmed `document_ids` together with the same `guest_token` here.
+        Unclaimed uploads are deleted after 24 hours.
       security:
+        - {}
         - bearerAuth: []
       requestBody:
         required: true
@@ -1156,6 +1171,38 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /settings/public:
+    get:
+      tags:
+        - Public
+      summary: Get intake status
+      description: >-
+        Whether applications are currently accepted (no login required).
+        applications_open is the effective state: it is false once close_on has
+        passed. When closed, closure_message is always set.
+      security: []
+      responses:
+        '200':
+          description: Settings retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      applications_open:
+                        type: boolean
+                      close_on:
+                        type: string
+                        description: RFC 3339 timestamp, or empty when no closing date is set
+                      closure_message:
+                        type: string
   /settings:
     get:
       tags:
@@ -1239,8 +1286,22 @@ paths:
       tags:
         - Sessions
       summary: Get session bookings
-      description: Get session availability for on-site/hybrid bookings
+      description: >-
+        Booked on-site/hybrid seats per start date, duration and session for
+        internships that haven't ended yet (6 seats per session), paginated.
       security: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+            maximum: 100
       responses:
         '200':
           description: Bookings retrieved
@@ -1257,3 +1318,6 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/Booking'
+                  meta:
+                    type: object
+                    description: Pagination (total, page, limit, pages)

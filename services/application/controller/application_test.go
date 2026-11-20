@@ -82,12 +82,14 @@ func init() {
 	// token yields 401 and the admin-only route yields 403 for non-admins.
 	auth := middleware.AuthMiddleware(testJWTSecret)
 
-	applications := applicationTestApp.Group("/api/v1/applications", auth)
+	applications := applicationTestApp.Group("/api/v1/applications")
+	// Submitting is open to guests; registered before the auth middleware, as in routes/api.go.
+	applications.Post("/", middleware.OptionalAuthMiddleware(testJWTSecret), controller.Create)
+	applications.Use(auth)
 	applications.Get("/mine", controller.ListMine)
-	applications.Post("/", controller.Create)
 	applications.Get("/:id", controller.Get)
 	applications.Patch("/:id/status", controller.UpdateStatus, middleware.AdminMiddleware())
-	applications.Post("/:id/notes", controller.AddNote)
+	applications.Post("/:id/notes", controller.AddNote, middleware.AdminMiddleware())
 	applications.Get("/", controller.ListAll)
 
 	public := applicationTestApp.Group("/api/v1/sessions")
@@ -281,10 +283,10 @@ func TestCreateApplicationRoute(t *testing.T) {
 		check      func(t *testing.T, body map[string]any)
 	}{
 		{
-			name:       "unauthorized - missing token",
+			name:       "guest without contact details is rejected",
 			headers:    nil,
 			payload:    validApplicationPayload(),
-			wantStatus: fiber.StatusUnauthorized,
+			wantStatus: fiber.StatusBadRequest,
 		},
 		{
 			name:       "validation - missing required fields",
@@ -548,6 +550,20 @@ func TestListMineRoute(t *testing.T) {
 func TestGetApplicationRoute(t *testing.T) {
 	profile := seedProfile(t)
 	appID := seedApplication(t, profile.ProfileID)
+	other := seedProfile(t)
+
+	// An internal note that the applicant must never receive.
+	_, err := applicationTestDB.Exec(context.Background(), `
+		INSERT INTO review_notes (id, application_id, author, text) VALUES ($1, $2, 'admin@example.com', 'internal only')
+	`, uuid.New().String(), appID)
+	require.NoError(t, err)
+
+	notesOf := func(t *testing.T, body map[string]any) []any {
+		data, ok := body["data"].(map[string]any)
+		require.True(t, ok, "response should have data: %v", body)
+		notes, _ := data["notes"].([]any)
+		return notes
+	}
 
 	tests := []struct {
 		name       string
@@ -569,7 +585,7 @@ func TestGetApplicationRoute(t *testing.T) {
 			wantStatus: fiber.StatusNotFound,
 		},
 		{
-			name:       "success - returns application",
+			name:       "success - owner gets own application without internal notes",
 			headers:    authHeaders(profile.UserID, "applicant"),
 			path:       "/api/v1/applications/" + appID,
 			wantStatus: fiber.StatusOK,
@@ -577,6 +593,22 @@ func TestGetApplicationRoute(t *testing.T) {
 				data, ok := body["data"].(map[string]any)
 				require.True(t, ok, "response should have data: %v", body)
 				assert.Equal(t, appID, data["id"])
+				assert.Empty(t, notesOf(t, body), "applicant must not receive internal notes")
+			},
+		},
+		{
+			name:       "not found - another applicant's application",
+			headers:    authHeaders(other.UserID, "applicant"),
+			path:       "/api/v1/applications/" + appID,
+			wantStatus: fiber.StatusNotFound,
+		},
+		{
+			name:       "success - admin gets any application with notes",
+			headers:    authHeaders(1, "admin"),
+			path:       "/api/v1/applications/" + appID,
+			wantStatus: fiber.StatusOK,
+			check: func(t *testing.T, body map[string]any) {
+				assert.Len(t, notesOf(t, body), 1)
 			},
 		},
 	}
@@ -683,11 +715,11 @@ func TestUpdateStatusRoute(t *testing.T) {
 	}
 }
 
-// TestAddNoteRoute covers POST /api/v1/applications/:id/notes.
+// TestAddNoteRoute covers POST /api/v1/applications/:id/notes (admin only).
 func TestAddNoteRoute(t *testing.T) {
 	profile := seedProfile(t)
 	appID := seedApplication(t, profile.ProfileID)
-	auth := authHeaders(profile.UserID, "applicant")
+	auth := authHeaders(1, "admin")
 
 	tests := []struct {
 		name       string
@@ -703,6 +735,13 @@ func TestAddNoteRoute(t *testing.T) {
 			payload:    map[string]any{"text": "Nice"},
 			path:       "/api/v1/applications/" + appID + "/notes",
 			wantStatus: fiber.StatusUnauthorized,
+		},
+		{
+			name:       "forbidden - applicant cannot add notes, even on own application",
+			headers:    authHeaders(profile.UserID, "applicant"),
+			payload:    map[string]any{"text": "Self review"},
+			path:       "/api/v1/applications/" + appID + "/notes",
+			wantStatus: fiber.StatusForbidden,
 		},
 		{
 			name:       "validation - missing text",
@@ -820,7 +859,6 @@ func TestUnauthorizedAccess(t *testing.T) {
 		path   string
 	}{
 		{"GET", "/api/v1/applications/mine"},
-		{"POST", "/api/v1/applications/"},
 		{"GET", "/api/v1/applications/" + appID},
 		{"PATCH", "/api/v1/applications/" + appID + "/status"},
 		{"POST", "/api/v1/applications/" + appID + "/notes"},
@@ -935,4 +973,283 @@ func TestParseFilterInvalidDate(t *testing.T) {
 	_, err := app.Test(req)
 	require.NoError(t, err)
 	assert.Error(t, gotErr)
+}
+
+// TestCreateApplicationDuplicate: an applicant can't hold two live
+// applications for the same specialization, but can apply for another one,
+// and can re-apply once the earlier application was rejected.
+func TestCreateApplicationDuplicate(t *testing.T) {
+	profile := seedProfile(t)
+	auth := authHeaders(profile.UserID, "applicant")
+
+	status, body := doJSON(t, "POST", "/api/v1/applications/", validApplicationPayload(), auth)
+	require.Equal(t, fiber.StatusOK, status, "first submission: %v", body)
+	firstID := body["data"].(map[string]any)["id"].(string)
+
+	status, body = doJSON(t, "POST", "/api/v1/applications/", validApplicationPayload(), auth)
+	assert.Equal(t, fiber.StatusConflict, status, "duplicate should be refused: %v", body)
+	assert.Contains(t, body["message"], "already have an application")
+
+	other := validApplicationPayload()
+	other["specialization"] = "frontend"
+	status, body = doJSON(t, "POST", "/api/v1/applications/", other, auth)
+	assert.Equal(t, fiber.StatusOK, status, "a different specialization is allowed: %v", body)
+
+	_, err := applicationTestDB.Exec(context.Background(), `UPDATE applications SET status = 'rejected' WHERE id = $1`, firstID)
+	require.NoError(t, err)
+	status, body = doJSON(t, "POST", "/api/v1/applications/", validApplicationPayload(), auth)
+	assert.Equal(t, fiber.StatusOK, status, "re-applying after rejection is allowed: %v", body)
+}
+
+// TestCreateApplicationSeatCapacity: on-site/hybrid interns are limited to
+// model.SessionCapacity per daily session over overlapping periods; remote
+// interns and non-overlapping periods are not limited.
+func TestCreateApplicationSeatCapacity(t *testing.T) {
+	// A start date far in the future (unique per run) keeps other tests and
+	// earlier runs out of this session's seat count.
+	start := time.Date(2090+rand.Intn(9), time.Month(1+rand.Intn(6)), 3, 0, 0, 0, 0, time.UTC)
+	payload := func(workMode string, startAt time.Time) map[string]any {
+		p := validApplicationPayload()
+		p["work_mode"] = workMode
+		p["session"] = "afternoon"
+		p["start_date"] = startAt.Format(time.RFC3339)
+		p["duration_months"] = 3
+		return p
+	}
+	submit := func(p map[string]any) (int, map[string]any) {
+		profile := seedProfile(t)
+		return doJSON(t, "POST", "/api/v1/applications/", p, authHeaders(profile.UserID, "applicant"))
+	}
+
+	for i := 0; i < model.SessionCapacity; i++ {
+		mode := "onsite"
+		if i%2 == 1 {
+			mode = "hybrid"
+		}
+		status, body := submit(payload(mode, start))
+		require.Equal(t, fiber.StatusOK, status, "seat %d: %v", i+1, body)
+	}
+
+	status, body := submit(payload("onsite", start.AddDate(0, 1, 0)))
+	assert.Equal(t, fiber.StatusConflict, status, "overlapping period should find the session full: %v", body)
+
+	status, body = submit(payload("remote", start))
+	assert.Equal(t, fiber.StatusOK, status, "remote interns need no seat: %v", body)
+
+	status, body = submit(payload("onsite", start.AddDate(0, 3, 0)))
+	assert.Equal(t, fiber.StatusOK, status, "a period starting after the others end is free: %v", body)
+}
+
+// TestAvailabilityPaginationAndSeats covers GET /api/v1/sessions/bookings:
+// pagination meta, the limit cap, seats counted out of model.SessionCapacity,
+// and internships that already ended being left out.
+func TestAvailabilityPaginationAndSeats(t *testing.T) {
+	// The latest possible start date keeps this group on the last page.
+	start := time.Date(2099, time.December, 1+rand.Intn(20), 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 2; i++ {
+		seedSeatApplication(t, seedProfile(t).ProfileID, start, "onsite", "afternoon", "submitted")
+	}
+	// Rejected applications free their seat; ended internships are hidden.
+	seedSeatApplication(t, seedProfile(t).ProfileID, start, "hybrid", "afternoon", "rejected")
+	ended := time.Date(2000, time.January, 3, 0, 0, 0, 0, time.UTC)
+	seedSeatApplication(t, seedProfile(t).ProfileID, ended, "onsite", "morning", "accepted")
+
+	status, body := doJSON(t, "GET", "/api/v1/sessions/bookings?page=1&limit=1", nil, nil)
+	require.Equal(t, fiber.StatusOK, status, "body: %v", body)
+	data, _ := body["data"].([]any)
+	assert.Len(t, data, 1, "limit is honoured")
+	meta, ok := body["meta"].(map[string]any)
+	require.True(t, ok, "response should carry pagination meta: %v", body)
+	total := int(meta["total"].(float64))
+	assert.GreaterOrEqual(t, total, 1)
+
+	status, body = doJSON(t, "GET", "/api/v1/sessions/bookings?limit=1000", nil, nil)
+	require.Equal(t, fiber.StatusOK, status)
+	assert.Equal(t, float64(100), body["meta"].(map[string]any)["per_page"], "limit is capped at 100")
+
+	lastPage := (total + 99) / 100
+	status, body = doJSON(t, "GET", fmt.Sprintf("/api/v1/sessions/bookings?limit=100&page=%d", lastPage), nil, nil)
+	require.Equal(t, fiber.StatusOK, status)
+	var found map[string]any
+	for _, row := range body["data"].([]any) {
+		b := row.(map[string]any)
+		if b["start_date"] == start.Format(time.RFC3339) && b["session"] == "afternoon" {
+			found = b
+		}
+		assert.NotEqual(t, ended.Format(time.RFC3339), b["start_date"], "ended internships must not be listed")
+	}
+	require.NotNil(t, found, "the seeded booking should be listed")
+	assert.Equal(t, float64(model.SessionCapacity-2), found["available_seats"], "two seats taken, the rejected one is free")
+}
+
+// TestListMineHidesInternalNotes: GET /applications/mine never returns review
+// notes to the applicant.
+func TestListMineHidesInternalNotes(t *testing.T) {
+	profile := seedProfile(t)
+	appID := seedApplication(t, profile.ProfileID)
+	seedNote(t, appID, "internal only")
+
+	status, body := doJSON(t, "GET", "/api/v1/applications/mine", nil, authHeaders(profile.UserID, "applicant"))
+	require.Equal(t, fiber.StatusOK, status, "body: %v", body)
+	apps := body["data"].(map[string]any)["applications"].([]any)
+	require.Len(t, apps, 1)
+	assert.Empty(t, apps[0].(map[string]any)["notes"])
+}
+
+// TestUpdateStatusRecordsHistory: each status change is saved together with
+// its history entry (newest first) and the admin's note.
+func TestUpdateStatusRecordsHistory(t *testing.T) {
+	profile := seedProfile(t)
+	appID := seedApplication(t, profile.ProfileID)
+	admin := authHeaders(1, "admin")
+	path := "/api/v1/applications/" + appID + "/status"
+
+	status, body := doJSON(t, "PATCH", path, map[string]any{"status": "shortlisted", "note": "Strong CV"}, admin)
+	require.Equal(t, fiber.StatusOK, status, "body: %v", body)
+	status, body = doJSON(t, "PATCH", path, map[string]any{"status": "accepted"}, admin)
+	require.Equal(t, fiber.StatusOK, status, "body: %v", body)
+
+	data := body["data"].(map[string]any)
+	assert.Equal(t, "accepted", data["status"])
+	history := data["history"].([]any)
+	require.Len(t, history, 2, "the seeded application has no submit entry, so two changes give two entries")
+	assert.Equal(t, "accepted", history[0].(map[string]any)["status"], "newest first")
+	assert.Equal(t, "shortlisted", history[1].(map[string]any)["status"])
+	assert.Equal(t, "Strong CV", history[1].(map[string]any)["note"])
+}
+
+// TestCreateApplicationDocuments: all documents are checked and linked in one
+// go; a single foreign document rejects the whole submission and nothing is
+// saved; repeating the same document id attaches it once.
+func TestCreateApplicationDocuments(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("several own documents are attached", func(t *testing.T) {
+		profile := seedProfile(t)
+		docs := []string{seedOwnedFile(t, profile.UserID), seedOwnedFile(t, profile.UserID)}
+		payload := validApplicationPayload()
+		payload["document_ids"] = []string{docs[0], docs[1], docs[0]}
+
+		status, body := doJSON(t, "POST", "/api/v1/applications/", payload, authHeaders(profile.UserID, "applicant"))
+		require.Equal(t, fiber.StatusOK, status, "body: %v", body)
+		assert.Len(t, body["data"].(map[string]any)["documents"], 2)
+	})
+
+	t.Run("a foreign document rejects the submission and saves nothing", func(t *testing.T) {
+		profile := seedProfile(t)
+		other := seedProfile(t)
+		payload := validApplicationPayload()
+		payload["document_ids"] = []string{seedOwnedFile(t, profile.UserID), seedOwnedFile(t, other.UserID)}
+
+		status, body := doJSON(t, "POST", "/api/v1/applications/", payload, authHeaders(profile.UserID, "applicant"))
+		assert.Equal(t, fiber.StatusBadRequest, status, "body: %v", body)
+
+		var saved int
+		require.NoError(t, applicationTestDB.QueryRow(ctx,
+			`SELECT COUNT(id) FROM applications WHERE applicant_id = $1`, profile.ProfileID).Scan(&saved))
+		assert.Equal(t, 0, saved)
+	})
+}
+
+// TestAddNoteAuthorFromToken: the note author is the admin from the token's
+// user payload, not anything in the request.
+func TestAddNoteAuthorFromToken(t *testing.T) {
+	appID := seedApplication(t, seedProfile(t).ProfileID)
+	status, body := doJSON(t, "POST", "/api/v1/applications/"+appID+"/notes",
+		map[string]any{"text": "Check references", "author": "spoofed@example.com"}, authHeaders(1, "admin"))
+	require.Equal(t, fiber.StatusOK, status, "body: %v", body)
+	notes := body["data"].(map[string]any)["notes"].([]any)
+	require.Len(t, notes, 1)
+	assert.Equal(t, testIdentityEmail, notes[0].(map[string]any)["author"])
+}
+
+// TestTokenWithoutUserID: a signed token that carries no user id has no user
+// payload, so applicant endpoints answer 401.
+func TestTokenWithoutUserID(t *testing.T) {
+	for _, ep := range []struct{ method, path string }{
+		{"GET", "/api/v1/applications/mine"},
+		{"POST", "/api/v1/applications/"},
+		{"GET", "/api/v1/applications/" + uuid.New().String()},
+	} {
+		t.Run(ep.method+" "+ep.path, func(t *testing.T) {
+			status, _ := doJSON(t, ep.method, ep.path, validApplicationPayload(), authHeaders(0, "applicant"))
+			assert.Equal(t, fiber.StatusUnauthorized, status)
+		})
+	}
+}
+
+// seedSeatApplication inserts an application with a start date, work mode,
+// session and status (for seat and availability tests).
+func seedSeatApplication(t *testing.T, profileID string, start time.Time, workMode, session, status string) string {
+	t.Helper()
+	appID := uuid.New().String()
+	_, err := applicationTestDB.Exec(context.Background(), `
+		INSERT INTO applications (id, reference, applicant_id, department, specialization,
+			motivation, experience, start_date, education_level, session, duration_months, work_mode, status)
+		VALUES ($1, $2, $3, 'software', 'backend', 'Build things', '2 years',
+			$4, 'university', $5, 3, $6, $7)
+	`, appID, fmt.Sprintf("APP-%s", uniqueSuffix()), profileID, start, session, workMode, status)
+	require.NoError(t, err)
+	return appID
+}
+
+// seedNote inserts an internal review note on an application.
+func seedNote(t *testing.T, appID, text string) {
+	t.Helper()
+	_, err := applicationTestDB.Exec(context.Background(), `
+		INSERT INTO review_notes (id, application_id, author, text) VALUES ($1, $2, 'admin@example.com', $3)
+	`, uuid.New().String(), appID, text)
+	require.NoError(t, err)
+}
+
+// TestCreateApplicationAsGuest covers applying without logging in: the contact
+// details create the account, a second try with the same email is refused, and
+// a request that sends a bad token is never treated as a guest.
+func TestCreateApplicationAsGuest(t *testing.T) {
+	email := fmt.Sprintf("guest-%d@example.com", time.Now().UnixNano())
+	guestPayload := func() map[string]any {
+		payload := validApplicationPayload()
+		payload["full_name"] = "Guest Applicant"
+		payload["email"] = email
+		payload["phone"] = "+250788123456"
+		return payload
+	}
+
+	t.Run("missing contact details", func(t *testing.T) {
+		status, _ := doJSON(t, "POST", "/api/v1/applications/", validApplicationPayload(), nil)
+		assert.Equal(t, fiber.StatusBadRequest, status)
+	})
+
+	t.Run("documents need an account", func(t *testing.T) {
+		payload := guestPayload()
+		payload["document_ids"] = []string{uuid.New().String()}
+		status, _ := doJSON(t, "POST", "/api/v1/applications/", payload, nil)
+		assert.Equal(t, fiber.StatusBadRequest, status)
+	})
+
+	t.Run("creates the account and the application", func(t *testing.T) {
+		status, body := doJSON(t, "POST", "/api/v1/applications/", guestPayload(), nil)
+		require.Equal(t, fiber.StatusOK, status, "body: %v", body)
+
+		var users int
+		require.NoError(t, applicationTestDB.QueryRow(context.Background(),
+			`SELECT COUNT(id) FROM users WHERE email_hash = $1 AND role = 'applicant'`,
+			utils.HashData(email)).Scan(&users))
+		assert.Equal(t, 1, users, "a user is created immediately")
+
+		app, _ := body["data"].(map[string]any)
+		applicant, _ := app["applicant"].(map[string]any)
+		assert.Equal(t, email, applicant["email"])
+	})
+
+	t.Run("existing email is refused", func(t *testing.T) {
+		status, _ := doJSON(t, "POST", "/api/v1/applications/", guestPayload(), nil)
+		assert.Equal(t, fiber.StatusConflict, status)
+	})
+
+	t.Run("bad token is not a guest", func(t *testing.T) {
+		status, _ := doJSON(t, "POST", "/api/v1/applications/", guestPayload(),
+			map[string]string{"Authorization": "Bearer not-a-token"})
+		assert.Equal(t, fiber.StatusUnauthorized, status)
+	})
 }

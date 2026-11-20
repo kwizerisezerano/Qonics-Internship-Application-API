@@ -2,6 +2,8 @@ package config
 
 import (
 	"context"
+	"fmt"
+	"log"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
@@ -150,6 +152,12 @@ func LoadConfig(serviceName string) (*Config, error) {
 		},
 	}
 
+	if config.JWT.Secret != "" && !utils.IsTestMode {
+		if warning := weakSecretWarning(config.JWT.Secret); warning != "" {
+			log.Printf("SECURITY WARNING: JWT_SECRET %s. Anyone who guesses it can sign their own admin token. Set a random value of at least %d characters (e.g. `openssl rand -base64 48`).", warning, minSecretLength)
+		}
+	}
+
 	AppConfig = config
 	return config, nil
 }
@@ -197,9 +205,36 @@ func (c *Config) InitDB() (*pgxpool.Pool, error) {
 
 // InitRedis initializes the Redis client
 func (c *Config) InitRedis() *redis.Client {
+	db := c.Redis.DB
+	if utils.IsTestMode {
+		// Tests must never share the live Redis database: the notification
+		// worker consumes "notification_queue" there and would send real emails
+		// for test data. Use a separate logical database instead.
+		db = testRedisDB
+	}
 	return redis.NewClient(&redis.Options{
 		Addr:     c.Redis.Host + ":" + c.Redis.Port,
 		Password: c.Redis.Password,
-		DB:       c.Redis.DB,
+		DB:       db,
 	})
+}
+
+// testRedisDB is the Redis logical database used while tests run.
+const testRedisDB = 15
+
+// minSecretLength is the shortest JWT secret considered safe.
+const minSecretLength = 32
+
+// weakSecretWarning describes why a signing secret is weak, or returns "" when
+// it looks fine. Startup only warns (it doesn't refuse) so existing local
+// setups keep working, but the warning shows up in every service's log.
+func weakSecretWarning(secret string) string {
+	switch {
+	case secret == "secret" || secret == "changeme" || secret == "your-secret-key":
+		return "is a well-known placeholder value"
+	case len(secret) < minSecretLength:
+		return fmt.Sprintf("is only %d characters long", len(secret))
+	default:
+		return ""
+	}
 }

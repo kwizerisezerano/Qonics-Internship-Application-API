@@ -24,6 +24,7 @@ CREATE INDEX idx_applications_applicant_id ON applications(applicant_id);
 CREATE INDEX idx_applications_status ON applications(status);
 CREATE INDEX idx_applications_department ON applications(department);
 CREATE INDEX idx_applications_session ON applications(session);
+CREATE INDEX idx_applications_submitted_at ON applications(submitted_at DESC);
 
 -- Trigger to automatically update updated_at
 CREATE TRIGGER update_applications_updated_at BEFORE UPDATE ON applications

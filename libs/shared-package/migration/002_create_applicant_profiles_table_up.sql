@@ -1,7 +1,8 @@
 -- Create applicant_profiles table with PII encryption
 CREATE TABLE IF NOT EXISTS applicant_profiles (
     id VARCHAR(50) PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    -- One profile per user.
+    user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
     full_name_encrypted BYTEA NOT NULL,
     full_name_hash VARCHAR(128) NOT NULL,
     email_encrypted BYTEA NOT NULL,
@@ -28,6 +29,7 @@ CREATE TABLE IF NOT EXISTS applicant_profiles (
 CREATE INDEX idx_applicant_profiles_user_id ON applicant_profiles(user_id);
 CREATE INDEX idx_applicant_profiles_email_hash ON applicant_profiles(email_hash);
 CREATE INDEX idx_applicant_profiles_phone_hash ON applicant_profiles(phone_hash);
+CREATE INDEX idx_applicant_profiles_full_name_hash ON applicant_profiles(full_name_hash);
 
 -- Trigger to automatically update updated_at
 CREATE TRIGGER update_applicant_profiles_updated_at BEFORE UPDATE ON applicant_profiles

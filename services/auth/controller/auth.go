@@ -3,9 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
@@ -22,7 +20,7 @@ import (
 
 const (
 	// passwordResetKeyPrefix namespaces the single-use reset tokens kept in Redis.
-	passwordResetKeyPrefix = "password_reset:"
+	passwordResetKeyPrefix = utils.PasswordResetKeyPrefix
 	// passwordResetTTL bounds how long a reset link stays valid.
 	passwordResetTTL = 30 * time.Minute
 )
@@ -31,7 +29,7 @@ type AuthController struct {
 	DB     *pgxpool.Pool
 	Config *config.Config
 	Redis  *redis.Client
-	Logger interface{} // Will be zap logger
+	Logger any // Will be zap logger
 }
 
 func NewAuthController(db *pgxpool.Pool, cfg *config.Config, rdb *redis.Client) *AuthController {
@@ -49,6 +47,7 @@ func (ac *AuthController) Register(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
+	req.Email = utils.NormalizeEmail(req.Email)
 	if err := model.Validate.Struct(&req); err != nil {
 		return utils.JsonValidationErrorResponse(c, err)
 	}
@@ -157,7 +156,7 @@ func (ac *AuthController) Register(c *fiber.Ctx) error {
 	// Send welcome email notification (rendered from the user_welcome template).
 	welcomeSubject := "Welcome to Qonics Internship Program"
 	welcomeMessage := fmt.Sprintf("Your account has been successfully created, %s. Start your application now!", req.FullName)
-	if err := utils.PublishTemplatedEmailNotification(ctx, ac.Redis, req.Email, welcomeSubject, "user_welcome", map[string]interface{}{
+	if err := utils.PublishTemplatedEmailNotification(ctx, ac.Redis, req.Email, welcomeSubject, "user_welcome", map[string]any{
 		"name":      req.FullName,
 		"email":     req.Email,
 		"login_url": ac.Config.WebURL,
@@ -192,13 +191,14 @@ func (ac *AuthController) Login(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
+	req.Email = utils.NormalizeEmail(req.Email)
 	if err := model.Validate.Struct(&req); err != nil {
 		return utils.JsonValidationErrorResponse(c, err)
 	}
 
 	ctx := context.Background()
-	emailHash := utils.HashData(req.Email)
-	email := req.Email // Store for later use
+	email := req.Email // Store for later use (already normalized)
+	emailHash := utils.HashData(email)
 
 	// Get user with encrypted data
 	var userID int
@@ -302,6 +302,7 @@ func (ac *AuthController) ForgotPassword(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
+	req.Email = utils.NormalizeEmail(req.Email)
 	if err := model.Validate.Struct(&req); err != nil {
 		return utils.JsonValidationErrorResponse(c, err)
 	}
@@ -351,7 +352,7 @@ func (ac *AuthController) ForgotPassword(c *fiber.Ctx) error {
 
 	// Queue the branded reset email (leazi pattern); a delivery failure must not
 	// change the response so account state is never leaked.
-	if err := utils.PublishTemplatedEmailNotification(ctx, ac.Redis, req.Email, "Reset your Qonics password", "password_reset", map[string]interface{}{
+	if err := utils.PublishTemplatedEmailNotification(ctx, ac.Redis, req.Email, "Reset your Qonics password", "password_reset", map[string]any{
 		"name":       fullName,
 		"email":      req.Email,
 		"reset_url":  frontendResetURL(ac.Config.WebURL, token),
@@ -423,16 +424,9 @@ func (ac *AuthController) ResetPassword(c *fiber.Ctx) error {
 	return utils.JsonSuccessResponse(c, "Password reset successful", nil)
 }
 
-// frontendResetURL builds the password-reset link consumed by the frontend
-// reset page (/auth/reset-password?token=...). WebURL is configured as a full
-// page URL (e.g. http://localhost:3000/auth/login), so only its origin is used
-// as the base of the link.
+// frontendResetURL builds the password-reset link for the frontend reset page.
 func frontendResetURL(webURL, token string) string {
-	origin := strings.TrimRight(webURL, "/")
-	if u, err := url.Parse(webURL); err == nil && u.Scheme != "" && u.Host != "" {
-		origin = u.Scheme + "://" + u.Host
-	}
-	return fmt.Sprintf("%s/auth/reset-password?token=%s", origin, token)
+	return utils.FrontendResetURL(webURL, token)
 }
 
 // ChangePassword handles password change for authenticated users

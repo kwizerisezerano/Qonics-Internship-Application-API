@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -42,4 +43,18 @@ func EncryptAndHash(ctx context.Context, db *pgxpool.Pool, data string) ([]byte,
 	}
 	hash := HashData(data)
 	return encrypted, hash, nil
+}
+
+// NormalizeEmail trims and lowercases an email address. Every place that
+// stores or looks up an email (and its hash) must use it, so "User@X.com" and
+// "user@x.com" are the same account.
+func NormalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+// DecryptSQL returns the SQL expression that decrypts an encrypted column in a
+// query, so PII can be read in the same SELECT (or JOIN) instead of one extra
+// round trip per value through DecryptData.
+func DecryptSQL(column string) string {
+	return "pgp_sym_decrypt(" + column + ", '" + GetEncryptionKey() + "')"
 }
