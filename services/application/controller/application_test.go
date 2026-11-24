@@ -1253,3 +1253,109 @@ func TestCreateApplicationAsGuest(t *testing.T) {
 		assert.Equal(t, fiber.StatusUnauthorized, status)
 	})
 }
+
+// seedGuestFile inserts a document a guest uploaded and confirmed with the
+// given upload token but that no application has claimed yet.
+func seedGuestFile(t *testing.T, token string) string {
+	t.Helper()
+	fileID := uuid.New().String()
+	_, err := applicationTestDB.Exec(context.Background(), `
+		INSERT INTO files (id, owner_id, owner_type, name, file_path, file_type, file_size, uploaded_at, deleted_at)
+		VALUES ($1, $2, 'user', 'cv.pdf', $3, 'cv', 1024, NOW(), NOW() + INTERVAL '24 hours')
+	`, fileID, utils.GuestUploadOwner(token), "uploads/"+fileID+".pdf")
+	require.NoError(t, err)
+	return fileID
+}
+
+// TestCreateApplicationAsGuestWithDocuments: a guest's uploaded documents are
+// claimed by the application (re-owned by the new user, no longer expiring),
+// and documents uploaded under someone else's token are refused.
+func TestCreateApplicationAsGuestWithDocuments(t *testing.T) {
+	token, err := utils.SecureRandString(utils.GuestUploadTokenBytes)
+	require.NoError(t, err)
+	otherToken, err := utils.SecureRandString(utils.GuestUploadTokenBytes)
+	require.NoError(t, err)
+
+	payload := func(email string, token string, fileIDs ...string) map[string]any {
+		p := validApplicationPayload()
+		p["full_name"] = "Guest Uploader"
+		p["email"] = email
+		p["phone"] = "+250788123456"
+		p["document_ids"] = fileIDs
+		if token != "" {
+			p["guest_token"] = token
+		}
+		return p
+	}
+	newEmail := func() string { return fmt.Sprintf("guestdocs-%d@example.com", time.Now().UnixNano()) }
+
+	mine := seedGuestFile(t, token)
+	theirs := seedGuestFile(t, otherToken)
+
+	t.Run("documents without a token are refused", func(t *testing.T) {
+		status, _ := doJSON(t, "POST", "/api/v1/applications/", payload(newEmail(), "", mine), nil)
+		assert.Equal(t, fiber.StatusBadRequest, status)
+	})
+
+	t.Run("someone else's documents are refused and no account is left behind", func(t *testing.T) {
+		email := newEmail()
+		status, _ := doJSON(t, "POST", "/api/v1/applications/", payload(email, token, theirs), nil)
+		assert.Equal(t, fiber.StatusBadRequest, status)
+
+		var users int
+		require.NoError(t, applicationTestDB.QueryRow(context.Background(),
+			`SELECT COUNT(id) FROM users WHERE email_hash = $1`, utils.HashData(email)).Scan(&users))
+		assert.Equal(t, 0, users)
+	})
+
+	t.Run("own documents are claimed", func(t *testing.T) {
+		email := newEmail()
+		status, body := doJSON(t, "POST", "/api/v1/applications/", payload(email, token, mine), nil)
+		require.Equal(t, fiber.StatusOK, status, "body: %v", body)
+
+		docs := body["data"].(map[string]any)["documents"].([]any)
+		require.Len(t, docs, 1, "the document is attached")
+
+		var owner string
+		var expiring bool
+		require.NoError(t, applicationTestDB.QueryRow(context.Background(),
+			`SELECT owner_id, deleted_at IS NOT NULL FROM files WHERE id = $1`, mine).Scan(&owner, &expiring))
+		assert.NotEqual(t, utils.GuestUploadOwner(token), owner, "re-owned by the new user")
+		assert.False(t, expiring, "no longer on the cleanup clock")
+
+		status, _ = doJSON(t, "POST", "/api/v1/applications/", payload(newEmail(), token, mine), nil)
+		assert.Equal(t, fiber.StatusBadRequest, status, "a claimed document can't be reused")
+	})
+}
+
+func TestCreateApplicationWithAmount(t *testing.T) {
+	guest := func(amount any) map[string]any {
+		payload := validApplicationPayload()
+		payload["full_name"] = "Amount Applicant"
+		payload["email"] = fmt.Sprintf("amount-%d@example.com", time.Now().UnixNano())
+		payload["phone"] = "+250788123456"
+		if amount != nil {
+			payload["amount"] = amount
+		}
+		return payload
+	}
+
+	t.Run("amount from the frontend is stored", func(t *testing.T) {
+		status, body := doJSON(t, "POST", "/api/v1/applications/", guest(20000.5), nil)
+		require.Equal(t, fiber.StatusOK, status, "body: %v", body)
+		app, _ := body["data"].(map[string]any)
+		assert.Equal(t, 20000.5, app["amount"])
+	})
+
+	t.Run("amount is optional", func(t *testing.T) {
+		status, body := doJSON(t, "POST", "/api/v1/applications/", guest(nil), nil)
+		require.Equal(t, fiber.StatusOK, status, "body: %v", body)
+		app, _ := body["data"].(map[string]any)
+		assert.Nil(t, app["amount"])
+	})
+
+	t.Run("negative amount is rejected", func(t *testing.T) {
+		status, _ := doJSON(t, "POST", "/api/v1/applications/", guest(-5), nil)
+		assert.Equal(t, fiber.StatusBadRequest, status)
+	})
+}

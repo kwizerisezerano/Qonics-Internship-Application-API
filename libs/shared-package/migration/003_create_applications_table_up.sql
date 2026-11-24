@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS applications (
     session VARCHAR(20) NOT NULL CHECK (session IN ('morning', 'afternoon', 'january-june', 'july-december')),
     duration_months INTEGER NOT NULL,
     work_mode VARCHAR(20) NOT NULL CHECK (work_mode IN ('onsite', 'remote', 'hybrid')),
+    amount NUMERIC(12,2) CHECK (amount >= 0),
     status VARCHAR(30) NOT NULL DEFAULT 'submitted' CHECK (status IN ('submitted', 'under_review', 'shortlisted', 'interview', 'accepted', 'rejected')),
     submitted_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     interview_at TIMESTAMP WITH TIME ZONE,
