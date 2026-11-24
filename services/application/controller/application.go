@@ -373,11 +373,11 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 	_, err = tx.Exec(ctx, `
 		INSERT INTO applications (id, reference, applicant_id, department, specialization,
 			motivation, experience, start_date, education_level, session,
-			duration_months, work_mode, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			duration_months, work_mode, amount, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`, appID, reference, applicant.ProfileID, req.Department, req.Specialization,
 		req.Motivation, req.Experience, startDate, req.EducationLevel,
-		req.Session, req.DurationMonths, req.WorkMode, "submitted")
+		req.Session, req.DurationMonths, req.WorkMode, req.Amount, "submitted")
 	if err != nil {
 		return ac.internalError(c, "Failed to create application", err)
 	}
@@ -415,15 +415,12 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 	}
 
 	if guest {
-		utils.RecordSuccessActivityLog(c, ac.DB, user.ID, "USER_REGISTER", "Account created while applying", nil)
-		ac.sendGuestAccessEmail(ctx, user.ID, req.FullName, req.Email)
+		utils.RecordSuccessActivityLog(c, ac.DB, user.ID, "USER_REGISTER", fmt.Sprintf("Account created while applying (user_id=%d, applicant_profile_id=%s)", user.ID, applicant.ProfileID), nil)
 	}
-	departmentName := model.DisplayName(req.Department)
-	specializationName := model.DisplayName(req.Specialization)
 
 	// Record the submission in the audit trail (leazi-style activity log).
 	utils.RecordSuccessActivityLog(c, ac.DB, user.ID, "APPLICATION_SUBMIT",
-		fmt.Sprintf("Submitted application %s for %s - %s", reference, req.Department, req.Specialization),
+		fmt.Sprintf("Submitted application (application_id=%s, user_id=%d, reference=%s) for %s - %s", appID, user.ID, reference, req.Department, req.Specialization),
 		map[string]any{
 			"application_id": appID,
 			"reference":      reference,
@@ -431,41 +428,10 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 			"specialization": req.Specialization,
 		})
 
-	// Notify the applicant over both channels (in-app + email) and fan out to
-	// every admin. Notification failures must never fail the submission, so they
-	// are logged only. Emails are rendered from HTML templates (leazi pattern).
-	applicantName := applicant.Name
-	if applicantName == "" {
-		applicantName = "An applicant"
-	}
-
-	applicantSubject := "Application Submitted Successfully"
-	applicantMessage := fmt.Sprintf("Your application for %s - %s has been submitted successfully and is awaiting review. You will be notified once it has been reviewed. Reference: %s", departmentName, specializationName, reference)
-	if err := utils.PublishInAppNotification(ctx, ac.Redis, user.ID, applicantSubject, applicantMessage); err != nil {
-		fmt.Printf("WARNING: Failed to send application submission notification: %v\n", err)
-	}
-	if applicant.Email != "" {
-		if err := utils.PublishTemplatedEmailNotification(ctx, ac.Redis, applicant.Email, applicantSubject, "application_submitted", map[string]any{
-			"name":           applicantName,
-			"reference":      reference,
-			"department":     departmentName,
-			"specialization": specializationName,
-		}); err != nil {
-			fmt.Printf("WARNING: Failed to send application submission email: %v\n", err)
-		}
-	}
-
-	adminSubject := "New Application Submitted"
-	adminMessage := fmt.Sprintf("%s submitted an application for %s - %s. Reference: %s", applicantName, departmentName, specializationName, reference)
-	if err := utils.NotifyAdmins(ctx, ac.DB, ac.Redis, adminSubject, adminMessage, "admin_new_application", map[string]any{
-		"applicant_name": applicantName,
-		"reference":      reference,
-		"department":     departmentName,
-		"specialization": specializationName,
-		"login_url":      ac.Config.WebURL,
-	}); err != nil {
-		fmt.Printf("WARNING: Failed to notify admins of new application: %v\n", err)
-	}
+	// Notifications go out in the background: Redis being slow or down must never
+	// hold up (or fail) a submission that is already saved. The gateway times out
+	// at 3s, so waiting here made the applicant see a 500 for a saved application.
+	go ac.notifySubmission(user.ID, applicant, req, reference, guest)
 
 	// Fetch created application
 	applications, err := ac.fetchApplications(ctx, "", appID)
@@ -658,7 +624,7 @@ func (ac *ApplicationController) UpdateStatus(c *fiber.Ctx) error {
 
 	// Record the status transition in the audit trail (leazi-style activity log).
 	utils.RecordSuccessActivityLog(c, ac.DB, user.ID, "APPLICATION_STATUS_UPDATE",
-		fmt.Sprintf("Updated application %s status to %s", reference, utils.HumanizeStatus(req.Status)),
+		fmt.Sprintf("Updated application status (application_id=%s, reference=%s) to %s", id, reference, utils.HumanizeStatus(req.Status)),
 		map[string]any{
 			"application_id": id,
 			"reference":      reference,
@@ -773,7 +739,7 @@ func (ac *ApplicationController) AddNote(c *fiber.Ctx) error {
 
 	// Record the note in the audit trail (leazi-style activity log).
 	utils.RecordSuccessActivityLog(c, ac.DB, user.ID, "REVIEW_NOTE_ADD",
-		fmt.Sprintf("Added a review note to application %s", id),
+		fmt.Sprintf("Added a review note (application_id=%s, user_id=%d)", id, user.ID),
 		map[string]any{
 			"application_id": id,
 			"note_id":        noteID,
@@ -1022,7 +988,7 @@ func (ac *ApplicationController) applicationTrends(ctx context.Context, whereCla
 var applicationSelect = `
 	SELECT a.id, a.reference, a.applicant_id, a.department, a.specialization,
 	       a.motivation, a.experience, a.start_date, a.education_level,
-	       a.session, a.duration_months, a.work_mode, a.status,
+	       a.session, a.duration_months, a.work_mode, a.amount, a.status,
 	       a.submitted_at, a.interview_at,
 	       ` + utils.DecryptSQL("ap.full_name_encrypted") + `,
 	       ` + utils.DecryptSQL("ap.email_encrypted") + `,
@@ -1092,7 +1058,7 @@ func scanApplications(rows pgx.Rows) ([]model.Application, error) {
 		err := rows.Scan(
 			&app.ID, &app.Reference, &app.Applicant.ID, &app.Department, &app.Specialization,
 			&app.Motivation, &app.Experience, &startDate, &app.EducationLevel,
-			&app.Session, &app.DurationMonths, &app.WorkMode, &app.Status,
+			&app.Session, &app.DurationMonths, &app.WorkMode, &app.Amount, &app.Status,
 			&submittedAt, &interviewAt,
 			&app.Applicant.FullName, &app.Applicant.Email, &app.Applicant.Phone,
 			&app.Applicant.Country, &app.Applicant.City,
@@ -1289,3 +1255,59 @@ func pageParams(c *fiber.Ctx) (page, limit int) {
 	}
 	return page, limit
 }
+
+// notifySubmission sends the post-submit notifications (set-password email for
+// a new guest, applicant in-app + email, admin fan-out). It is best-effort and
+// runs in the background with its own deadline, so failures are only logged.
+// Emails are rendered from HTML templates (leazi pattern).
+func (ac *ApplicationController) notifySubmission(userID int, applicant applicantRef, req model.NewApplicationPayload, reference string, guest bool) {
+	notifySlots <- struct{}{}
+	defer func() { <-notifySlots }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if guest {
+		ac.sendGuestAccessEmail(ctx, userID, req.FullName, req.Email)
+	}
+
+	departmentName := model.DisplayName(req.Department)
+	specializationName := model.DisplayName(req.Specialization)
+
+	applicantName := applicant.Name
+	if applicantName == "" {
+		applicantName = "An applicant"
+	}
+
+	applicantSubject := "Application Submitted Successfully"
+	applicantMessage := fmt.Sprintf("Your application for %s - %s has been submitted successfully and is awaiting review. You will be notified once it has been reviewed. Reference: %s", departmentName, specializationName, reference)
+	if err := utils.PublishInAppNotification(ctx, ac.Redis, userID, applicantSubject, applicantMessage); err != nil {
+		fmt.Printf("WARNING: Failed to send application submission notification: %v\n", err)
+	}
+	if applicant.Email != "" {
+		if err := utils.PublishTemplatedEmailNotification(ctx, ac.Redis, applicant.Email, applicantSubject, "application_submitted", map[string]any{
+			"name":           applicantName,
+			"reference":      reference,
+			"department":     departmentName,
+			"specialization": specializationName,
+		}); err != nil {
+			fmt.Printf("WARNING: Failed to send application submission email: %v\n", err)
+		}
+	}
+
+	adminSubject := "New Application Submitted"
+	adminMessage := fmt.Sprintf("%s submitted an application for %s - %s. Reference: %s", applicantName, departmentName, specializationName, reference)
+	if err := utils.NotifyAdmins(ctx, ac.DB, ac.Redis, adminSubject, adminMessage, "admin_new_application", map[string]any{
+		"applicant_name": applicantName,
+		"reference":      reference,
+		"department":     departmentName,
+		"specialization": specializationName,
+		"login_url":      ac.Config.WebURL,
+	}); err != nil {
+		fmt.Printf("WARNING: Failed to notify admins of new application: %v\n", err)
+	}
+}
+
+// notifySlots is a semaphore capping how many submissions notify at once, so a
+// burst of applications cannot open unbounded Redis/DB work in the background.
+var notifySlots = make(chan struct{}, 10)

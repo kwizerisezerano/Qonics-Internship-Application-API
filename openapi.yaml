@@ -152,6 +152,10 @@ components:
           type: integer
         work_mode:
           type: string
+        amount:
+          type: number
+          nullable: true
+          description: Amount sent by the frontend with the application (optional, >= 0).
         status:
           type: string
           enum: [submitted, under_review, shortlisted, interview, accepted, rejected]
@@ -1170,6 +1174,66 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+
+  /prices:
+    get:
+      tags:
+        - Public
+      summary: Get internship price
+      description: Price per month (default 200000 RWF). No login required.
+      security: []
+      responses:
+        '200':
+          description: Prices retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      price_per_month:
+                        type: number
+                        example: 200000
+                      currency:
+                        type: string
+                        example: RWF
+    put:
+      tags:
+        - Settings
+      summary: Set internship price (admin)
+      description: Admin only. currency is optional and keeps its current value when omitted.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [price_per_month]
+              properties:
+                price_per_month:
+                  type: number
+                  minimum: 0
+                  example: 200000
+                currency:
+                  type: string
+                  example: RWF
+      responses:
+        '200':
+          description: Prices updated
+        '400':
+          description: Validation error
+        '401':
+          description: Missing or invalid token
+        '403':
+          description: Not an admin
 
   /settings/public:
     get:

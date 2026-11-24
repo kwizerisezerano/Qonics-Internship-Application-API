@@ -136,6 +136,7 @@ Public (no token for guests). Same body as today, plus the guest fields:
   "session": "morning",
   "duration_months": 3,
   "work_mode": "remote",
+  "amount": 20000,
 
   "document_ids": ["file-id-1", "file-id-2"],
   "guest_token": "the token from section 3"
@@ -202,27 +203,126 @@ A guest account is created with **only name, email and phone**. The profile fiel
 
 ---
 
-## 9. Quick manual test (curl)
+## 9. Full curl reference
+
+Replace `BASE` with the gateway (`http://localhost:8088` locally). Every call below is public: **send no `Authorization` header**. In Apidog use Import → cURL, and put `BASE`, `GUEST_TOKEN` and `FILE_ID` in environment variables.
+
+### 9.1 Before the form (public data)
 
 ```bash
-BASE=http://localhost:8088
+# Is intake open?  -> data.applications_open, data.close_on, data.closure_message
+curl 'BASE/settings/public'
 
-# 1) upload (first call, no token)
-curl -s -X POST $BASE/files/guest/presigned-url -H 'Content-Type: application/json' \
-  -d '{"file_name":"cv.pdf","file_type":"cv","file_size":1024}'
-# -> note data.guest_token and data.file_id (PUT to data.presigned_url in a real flow)
-
-# 2) confirm
-curl -s -X POST $BASE/files/guest/confirm-upload -H 'Content-Type: application/json' \
-  -d '{"file_id":"<file_id>","guest_token":"<guest_token>"}'
-
-# 3) apply
-curl -s -X POST $BASE/applications -H 'Content-Type: application/json' -d '{
-  "full_name":"Jane Doe","email":"jane@example.com","phone":"+250788123456",
-  "department":"software","specialization":"backend","motivation":"x","experience":"y",
-  "start_date":"2026-12-15T00:00:00Z","education_level":"university","session":"morning",
-  "duration_months":3,"work_mode":"remote",
-  "document_ids":["<file_id>"],"guest_token":"<guest_token>"}'
+# Seat availability (replaces GET /applications/mine for guests)
+curl 'BASE/sessions/bookings?page=1&limit=100'
 ```
 
+### 9.2 Upload a document
+
+```bash
+# a) first file: no guest_token. Response data: presigned_url, file_id, guest_token
+curl -X POST 'BASE/files/guest/presigned-url' \
+  -H 'Content-Type: application/json' \
+  -d '{"file_name":"cv.pdf","file_type":"cv","file_size":123456}'
+
+# b) send the bytes to the presigned_url from (a)
+curl -X PUT 'PRESIGNED_URL' -H 'Content-Type: application/pdf' --data-binary '@cv.pdf'
+
+# c) confirm (required, or the file can't be attached)
+curl -X POST 'BASE/files/guest/confirm-upload' \
+  -H 'Content-Type: application/json' \
+  -d '{"file_id":"FILE_ID","guest_token":"GUEST_TOKEN"}'
+
+# d) every further file: same steps, but send the SAME guest_token
+curl -X POST 'BASE/files/guest/presigned-url' \
+  -H 'Content-Type: application/json' \
+  -d '{"file_name":"transcript.pdf","file_type":"transcript","file_size":98765,"guest_token":"GUEST_TOKEN"}'
+```
+
+`file_type`: `cv`, `transcript`, `diploma`, `certificates`, `cover_letter`. Files: pdf/doc/docx, max 5 MB, max 5 files per token.
+
+### 9.3 Submit the application
+
+```bash
+# with documents
+curl -X POST 'BASE/applications' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "full_name":"Jane Doe",
+    "email":"jane@example.com",
+    "phone":"+250788123456",
+    "department":"software",
+    "specialization":"backend",
+    "motivation":"I want to learn",
+    "experience":"2 years",
+    "start_date":"2026-12-15T00:00:00Z",
+    "education_level":"university",
+    "session":"morning",
+    "duration_months":3,
+    "work_mode":"remote","amount":20000,
+    "document_ids":["FILE_ID","FILE_ID_2"],
+    "guest_token":"GUEST_TOKEN"
+  }'
+```
+
+Without documents: the same body with no `document_ids` and no `guest_token`.
+Expected: `200 "Application created"`. `data.documents` lists the attached files.
+
+### 9.4 After submitting: the guest sets a password
+
+The guest gets an email with a link to `/auth/reset-password?token=...`. That page calls:
+
+```bash
+curl -X POST 'BASE/auth/reset-password' \
+  -H 'Content-Type: application/json' \
+  -d '{"token":"TOKEN_FROM_EMAIL","password":"Str0ng!Passw0rd"}'
+```
+
+Then they log in:
+
+```bash
+curl -X POST 'BASE/auth/login' \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"jane@example.com","password":"Str0ng!Passw0rd"}'
+```
+
+If the link expired (7 days):
+
+```bash
+curl -X POST 'BASE/auth/forgot-password' \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"jane@example.com"}'
+```
+
+### 9.5 Error cases to test (use a new email each time)
+
+| Test | How | Expected |
+|---|---|---|
+| Email already registered | Submit 9.3 twice with the same email | `409` "An account with this email already exists. Please log in to apply." |
+| Missing contact details | 9.3 without `full_name`, `email` and `phone` | `400` |
+| Name with digits | `"full_name":"Jane 2"` | `400` "full_name contains unsupported characters" |
+| Bad phone | `"phone":"abc"` | `400` |
+| Documents without token | 9.3 with `document_ids` but no `guest_token` | `400` "guest_token is required to attach documents" |
+| Someone else's / reused file | Submit 9.3 twice with the same `FILE_ID` and different emails | `400` "Invalid or unconfirmed document" |
+| Unconfirmed file | Skip step 9.2(c), then submit | `400` "Invalid or unconfirmed document" |
+| More than 5 files | Request a 6th presigned URL with the same token | `400` "You can upload at most 5 documents..." |
+| Wrong file type | `"file_name":"virus.exe"` | `400` "Only PDF, DOC and DOCX files can be uploaded" |
+| File too large | `"file_size":6000000` | `400` |
+| Bad token header | `-H 'Authorization: Bearer abc'` on 9.3 | `401` (never a guest) |
+| Applications closed | Admin closes intake, then submit | `403` with the admin's message |
+| Rate limit | More than 10 submits or 15 uploads in a minute from one IP | `429` |
+
 Interactive API docs for `POST /applications` are in `openapi.yaml`.
+
+## 10. Amount field
+
+`POST /applications` accepts an optional `amount` (number, `>= 0`, max 100,000,000). The backend stores it as sent and returns it as `amount` (`null` when not sent). The frontend decides the value, for example the on-site fee.
+
+Suggested text for the on-site morning session:
+"On-site, morning session (09:00 - 11:00): this is a paid session. The fee includes a coffee break."
+
+## 11. Prices
+
+- `GET /prices` (public): `{"data":{"price_per_month":200000,"currency":"RWF"}}`. Default is 200000 RWF per month.
+- `PUT /prices` (admin, Bearer token): body `{"price_per_month":250000}`; `currency` is optional.
+- Show the price on the form and send `amount` (price per month x duration) with `POST /applications`.

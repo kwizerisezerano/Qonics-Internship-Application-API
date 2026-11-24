@@ -46,6 +46,7 @@ type Application struct {
 	Session        string                `json:"session"`
 	DurationMonths int                   `json:"duration_months"`
 	WorkMode       string                `json:"work_mode"`
+	Amount         *float64              `json:"amount"`
 	Status         string                `json:"status"`
 	SubmittedAt    string                `json:"submitted_at"`
 	InterviewAt    *string               `json:"interview_at,omitempty"`
@@ -176,16 +177,18 @@ type NewApplicationPayload struct {
 	Email    string `json:"email" validate:"omitempty,email"`
 	Phone    string `json:"phone" validate:"omitempty,max=30,phone"`
 
-	Department     string   `json:"department" validate:"required,oneof=software iot"`
-	Specialization string   `json:"specialization" validate:"required,specialization"`
-	Motivation     string   `json:"motivation" validate:"required,max=2000"`
-	Experience     string   `json:"experience" validate:"required,max=2000"`
-	StartDate      string   `json:"start_date"`
-	EducationLevel string   `json:"education_level" validate:"required,oneof=university high_school"`
-	Session        string   `json:"session" validate:"required,oneof=morning afternoon"`
-	DurationMonths int      `json:"duration_months" validate:"required,min=1"`
-	WorkMode       string   `json:"work_mode" validate:"required,oneof=onsite remote hybrid"`
-	DocumentIDs    []string `json:"document_ids" validate:"omitempty,dive,uuid"`
+	Department     string `json:"department" validate:"required,oneof=software iot"`
+	Specialization string `json:"specialization" validate:"required,specialization"`
+	Motivation     string `json:"motivation" validate:"required,max=2000"`
+	Experience     string `json:"experience" validate:"required,max=2000"`
+	StartDate      string `json:"start_date"`
+	EducationLevel string `json:"education_level" validate:"required,oneof=university high_school"`
+	Session        string `json:"session" validate:"required,oneof=morning afternoon"`
+	DurationMonths int    `json:"duration_months" validate:"required,min=1"`
+	WorkMode       string `json:"work_mode" validate:"required,oneof=onsite remote hybrid"`
+	// Amount is supplied by the frontend and stored as given (optional).
+	Amount      *float64 `json:"amount" validate:"omitempty,gte=0,lte=100000000"`
+	DocumentIDs []string `json:"document_ids" validate:"omitempty,dive,uuid"`
 	// GuestToken proves ownership of documents a guest uploaded before applying
 	// (returned by the file service's guest upload); only used without a login.
 	GuestToken string `json:"guest_token" validate:"omitempty,len=32,hexadecimal"`
