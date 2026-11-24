@@ -97,6 +97,8 @@ func init() {
 	// Same order as routes/api.go: the public route is registered before the
 	// admin-only settings group so its middleware never runs for it.
 	applicantTestApp.Get("/api/v1/settings/public", controller.GetPublicSettings)
+	applicantTestApp.Get("/api/v1/prices", controller.GetPrices)
+	applicantTestApp.Put("/api/v1/prices", auth, middleware.AdminMiddleware(), controller.SavePrices)
 
 	settings := applicantTestApp.Group("/api/v1/settings", auth, middleware.AdminMiddleware())
 	settings.Get("/", controller.GetSettings)
@@ -832,6 +834,7 @@ func TestUnauthorizedAccess(t *testing.T) {
 		{"GET", "/api/v1/activity-logs/"},
 		{"GET", "/api/v1/settings/"},
 		{"PUT", "/api/v1/settings/"},
+		{"PUT", "/api/v1/prices"},
 	}
 
 	for _, ep := range endpoints {
@@ -997,4 +1000,50 @@ func TestGetPublicSettingsRoute(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPricesRoutes covers GET /api/v1/prices (public) and PUT /api/v1/prices (admin).
+func TestPricesRoutes(t *testing.T) {
+	admin := authHeaders(1, "admin")
+	_, err := applicantTestDB.Exec(context.Background(), `
+		INSERT INTO prices (id, price_per_month, currency) VALUES (1, 200000, 'RWF')
+		ON CONFLICT (id) DO UPDATE SET price_per_month = 200000, currency = 'RWF'`)
+	require.NoError(t, err)
+
+	t.Run("public read returns the default", func(t *testing.T) {
+		status, body := doJSON(t, "GET", "/api/v1/prices", nil, nil)
+		require.Equal(t, fiber.StatusOK, status)
+		data, _ := body["data"].(map[string]any)
+		assert.Equal(t, 200000.0, data["price_per_month"])
+		assert.Equal(t, "RWF", data["currency"])
+	})
+
+	t.Run("no token is unauthorized", func(t *testing.T) {
+		status, _ := doJSON(t, "PUT", "/api/v1/prices", map[string]any{"price_per_month": 1}, nil)
+		assert.Equal(t, fiber.StatusUnauthorized, status)
+	})
+
+	t.Run("applicant is forbidden", func(t *testing.T) {
+		status, _ := doJSON(t, "PUT", "/api/v1/prices", map[string]any{"price_per_month": 1}, authHeaders(1, "applicant"))
+		assert.Equal(t, fiber.StatusForbidden, status)
+	})
+
+	t.Run("negative price is rejected", func(t *testing.T) {
+		status, _ := doJSON(t, "PUT", "/api/v1/prices", map[string]any{"price_per_month": -1}, admin)
+		assert.Equal(t, fiber.StatusBadRequest, status)
+	})
+
+	t.Run("missing price is rejected", func(t *testing.T) {
+		status, _ := doJSON(t, "PUT", "/api/v1/prices", map[string]any{"currency": "RWF"}, admin)
+		assert.Equal(t, fiber.StatusBadRequest, status)
+	})
+
+	t.Run("admin updates and public reads the new price", func(t *testing.T) {
+		status, _ := doJSON(t, "PUT", "/api/v1/prices", map[string]any{"price_per_month": 250000}, admin)
+		require.Equal(t, fiber.StatusOK, status)
+		_, body := doJSON(t, "GET", "/api/v1/prices", nil, nil)
+		data, _ := body["data"].(map[string]any)
+		assert.Equal(t, 250000.0, data["price_per_month"])
+		assert.Equal(t, "RWF", data["currency"], "currency is kept when omitted")
+	})
 }

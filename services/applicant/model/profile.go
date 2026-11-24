@@ -130,3 +130,10 @@ type ActivityLogFilter struct {
 	// Search matches the description (ILIKE) and the user name/email hashes.
 	Search string `query:"search"`
 }
+
+// Prices is the internship price list managed by admins. PricePerMonth is a
+// pointer so an update must state it explicitly (0 is a valid free price).
+type Prices struct {
+	PricePerMonth *float64 `json:"price_per_month" validate:"required,gte=0,lte=100000000"`
+	Currency      string   `json:"currency" validate:"omitempty,len=3,uppercase"`
+}
