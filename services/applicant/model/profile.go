@@ -131,9 +131,22 @@ type ActivityLogFilter struct {
 	Search string `query:"search"`
 }
 
-// Prices is the internship price list managed by admins. PricePerMonth is a
-// pointer so an update must state it explicitly (0 is a valid free price).
-type Prices struct {
-	PricePerMonth *float64 `json:"price_per_month" validate:"required,gte=0,lte=100000000"`
-	Currency      string   `json:"currency" validate:"omitempty,len=3,uppercase"`
+// Price is one admin-set price: a course (specialization) for a period
+// (duration_months). Price is the total for that period.
+type Price struct {
+	ID             int      `json:"id"`
+	Department     string   `json:"department" validate:"required,oneof=software iot"`
+	Specialization string   `json:"specialization" validate:"required"`
+	DurationMonths int      `json:"duration_months" validate:"required,min=1,max=12"`
+	Price          *float64 `json:"price" validate:"required,gte=0,lte=100000000"`
+	Currency       string   `json:"currency" validate:"omitempty,len=3,uppercase"`
+}
+
+// PriceQuote is the price a course and period resolve to, set or default.
+type PriceQuote struct {
+	Specialization string  `json:"specialization"`
+	DurationMonths int     `json:"duration_months"`
+	Price          float64 `json:"price"`
+	Currency       string  `json:"currency"`
+	IsDefault      bool    `json:"is_default"`
 }
