@@ -155,7 +155,7 @@ components:
         amount:
           type: number
           nullable: true
-          description: Amount sent by the frontend with the application (optional, >= 0).
+          description: Calculated by the backend from the course and period price (default 200000 x duration_months); a client-sent amount is ignored.
         status:
           type: string
           enum: [submitted, under_review, shortlisted, interview, accepted, rejected]
@@ -174,6 +174,33 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ApplicationNote'
+
+    Price:
+      type: object
+      required: [department, specialization, duration_months, price]
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        department:
+          type: string
+          enum: [software, iot]
+        specialization:
+          type: string
+          example: backend
+        duration_months:
+          type: integer
+          minimum: 1
+          maximum: 12
+          example: 3
+        price:
+          type: number
+          minimum: 0
+          description: Total price for the period.
+          example: 450000
+        currency:
+          type: string
+          example: RWF
 
     ApplicationHistory:
       type: object
@@ -1179,9 +1206,18 @@ paths:
     get:
       tags:
         - Public
-      summary: Get internship price
-      description: Price per month (default 200000 RWF). No login required.
+      summary: List prices by course and period
+      description: >-
+        Admin-set prices (no login). Paginated; filter with department,
+        specialization and duration_months. A course and period with no row uses
+        the default of 200000 RWF per month (see /prices/quote).
       security: []
+      parameters:
+        - {name: page, in: query, schema: {type: integer, default: 1}}
+        - {name: limit, in: query, schema: {type: integer, default: 10, maximum: 100}}
+        - {name: department, in: query, schema: {type: string, enum: [software, iot]}}
+        - {name: specialization, in: query, schema: {type: string}}
+        - {name: duration_months, in: query, schema: {type: integer}}
       responses:
         '200':
           description: Prices retrieved
@@ -1190,24 +1226,17 @@ paths:
               schema:
                 type: object
                 properties:
-                  status:
-                    type: integer
-                  message:
-                    type: string
                   data:
-                    type: object
-                    properties:
-                      price_per_month:
-                        type: number
-                        example: 200000
-                      currency:
-                        type: string
-                        example: RWF
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Price'
     put:
       tags:
         - Settings
-      summary: Set internship price (admin)
-      description: Admin only. currency is optional and keeps its current value when omitted.
+      summary: Set the price of a course for a period (admin)
+      description: >-
+        Admin only. Creates the price, or replaces it when that specialization
+        and duration_months already have one. price is the total for the period.
       security:
         - bearerAuth: []
       requestBody:
@@ -1215,25 +1244,63 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required: [price_per_month]
-              properties:
-                price_per_month:
-                  type: number
-                  minimum: 0
-                  example: 200000
-                currency:
-                  type: string
-                  example: RWF
+              $ref: '#/components/schemas/Price'
       responses:
         '200':
-          description: Prices updated
+          description: Price saved
         '400':
-          description: Validation error
+          description: Validation error (e.g. specialization not in the department)
         '401':
           description: Missing or invalid token
         '403':
           description: Not an admin
+
+  /prices/quote:
+    get:
+      tags:
+        - Public
+      summary: Price for a course and period
+      description: >-
+        The admin-set price, or 200000 x duration_months when none is set
+        (is_default is true then). The application amount is calculated the same way.
+      security: []
+      parameters:
+        - {name: specialization, in: query, required: true, schema: {type: string, example: backend}}
+        - {name: duration_months, in: query, required: true, schema: {type: integer, example: 3}}
+      responses:
+        '200':
+          description: Price retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      specialization: {type: string}
+                      duration_months: {type: integer}
+                      price: {type: number, example: 600000}
+                      currency: {type: string, example: RWF}
+                      is_default: {type: boolean}
+        '400':
+          description: Missing or invalid specialization or duration_months
+
+  /prices/{id}:
+    delete:
+      tags:
+        - Settings
+      summary: Remove a price (admin)
+      description: That course and period then use the default price.
+      security:
+        - bearerAuth: []
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: integer}}
+      responses:
+        '200':
+          description: Price deleted
+        '404':
+          description: Price not found
 
   /settings/public:
     get:
