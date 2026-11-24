@@ -97,8 +97,10 @@ func init() {
 	// Same order as routes/api.go: the public route is registered before the
 	// admin-only settings group so its middleware never runs for it.
 	applicantTestApp.Get("/api/v1/settings/public", controller.GetPublicSettings)
-	applicantTestApp.Get("/api/v1/prices", controller.GetPrices)
-	applicantTestApp.Put("/api/v1/prices", auth, middleware.AdminMiddleware(), controller.SavePrices)
+	applicantTestApp.Get("/api/v1/prices", controller.ListPrices)
+	applicantTestApp.Get("/api/v1/prices/quote", controller.GetPriceQuote)
+	applicantTestApp.Put("/api/v1/prices", auth, middleware.AdminMiddleware(), controller.SavePrice)
+	applicantTestApp.Delete("/api/v1/prices/:id", auth, middleware.AdminMiddleware(), controller.DeletePrice)
 
 	settings := applicantTestApp.Group("/api/v1/settings", auth, middleware.AdminMiddleware())
 	settings.Get("/", controller.GetSettings)
@@ -835,6 +837,7 @@ func TestUnauthorizedAccess(t *testing.T) {
 		{"GET", "/api/v1/settings/"},
 		{"PUT", "/api/v1/settings/"},
 		{"PUT", "/api/v1/prices"},
+		{"DELETE", "/api/v1/prices/1"},
 	}
 
 	for _, ep := range endpoints {
@@ -1002,48 +1005,89 @@ func TestGetPublicSettingsRoute(t *testing.T) {
 	}
 }
 
-// TestPricesRoutes covers GET /api/v1/prices (public) and PUT /api/v1/prices (admin).
+// TestPricesRoutes covers prices by course and period (public read, admin write).
 func TestPricesRoutes(t *testing.T) {
 	admin := authHeaders(1, "admin")
-	_, err := applicantTestDB.Exec(context.Background(), `
-		INSERT INTO prices (id, price_per_month, currency) VALUES (1, 200000, 'RWF')
-		ON CONFLICT (id) DO UPDATE SET price_per_month = 200000, currency = 'RWF'`)
+	_, err := applicantTestDB.Exec(context.Background(), `DELETE FROM prices`)
 	require.NoError(t, err)
 
-	t.Run("public read returns the default", func(t *testing.T) {
-		status, body := doJSON(t, "GET", "/api/v1/prices", nil, nil)
+	price := func(v any) map[string]any {
+		return map[string]any{"department": "software", "specialization": "backend", "duration_months": 3, "price": v}
+	}
+	const quote = "/api/v1/prices/quote?specialization=backend&duration_months=3"
+
+	t.Run("unset course and period uses the default", func(t *testing.T) {
+		status, body := doJSON(t, "GET", quote, nil, nil)
 		require.Equal(t, fiber.StatusOK, status)
 		data, _ := body["data"].(map[string]any)
-		assert.Equal(t, 200000.0, data["price_per_month"])
-		assert.Equal(t, "RWF", data["currency"])
+		assert.Equal(t, 600000.0, data["price"])
+		assert.Equal(t, true, data["is_default"])
+	})
+
+	t.Run("quote needs a valid course and period", func(t *testing.T) {
+		status, _ := doJSON(t, "GET", "/api/v1/prices/quote?specialization=nope&duration_months=3", nil, nil)
+		assert.Equal(t, fiber.StatusBadRequest, status)
 	})
 
 	t.Run("no token is unauthorized", func(t *testing.T) {
-		status, _ := doJSON(t, "PUT", "/api/v1/prices", map[string]any{"price_per_month": 1}, nil)
+		status, _ := doJSON(t, "PUT", "/api/v1/prices", price(1), nil)
 		assert.Equal(t, fiber.StatusUnauthorized, status)
 	})
 
 	t.Run("applicant is forbidden", func(t *testing.T) {
-		status, _ := doJSON(t, "PUT", "/api/v1/prices", map[string]any{"price_per_month": 1}, authHeaders(1, "applicant"))
+		status, _ := doJSON(t, "PUT", "/api/v1/prices", price(1), authHeaders(1, "applicant"))
 		assert.Equal(t, fiber.StatusForbidden, status)
 	})
 
-	t.Run("negative price is rejected", func(t *testing.T) {
-		status, _ := doJSON(t, "PUT", "/api/v1/prices", map[string]any{"price_per_month": -1}, admin)
+	t.Run("negative or missing price is rejected", func(t *testing.T) {
+		status, _ := doJSON(t, "PUT", "/api/v1/prices", price(-1), admin)
+		assert.Equal(t, fiber.StatusBadRequest, status)
+		status, _ = doJSON(t, "PUT", "/api/v1/prices", price(nil), admin)
 		assert.Equal(t, fiber.StatusBadRequest, status)
 	})
 
-	t.Run("missing price is rejected", func(t *testing.T) {
-		status, _ := doJSON(t, "PUT", "/api/v1/prices", map[string]any{"currency": "RWF"}, admin)
+	t.Run("specialization must belong to the department", func(t *testing.T) {
+		p := price(1000)
+		p["department"] = "iot"
+		status, _ := doJSON(t, "PUT", "/api/v1/prices", p, admin)
 		assert.Equal(t, fiber.StatusBadRequest, status)
 	})
 
-	t.Run("admin updates and public reads the new price", func(t *testing.T) {
-		status, _ := doJSON(t, "PUT", "/api/v1/prices", map[string]any{"price_per_month": 250000}, admin)
+	var id float64
+	t.Run("admin sets a price and the public reads it", func(t *testing.T) {
+		status, body := doJSON(t, "PUT", "/api/v1/prices", price(450000), admin)
 		require.Equal(t, fiber.StatusOK, status)
-		_, body := doJSON(t, "GET", "/api/v1/prices", nil, nil)
 		data, _ := body["data"].(map[string]any)
-		assert.Equal(t, 250000.0, data["price_per_month"])
-		assert.Equal(t, "RWF", data["currency"], "currency is kept when omitted")
+		id, _ = data["id"].(float64)
+
+		status, body = doJSON(t, "GET", quote, nil, nil)
+		require.Equal(t, fiber.StatusOK, status)
+		data, _ = body["data"].(map[string]any)
+		assert.Equal(t, 450000.0, data["price"])
+		assert.Equal(t, false, data["is_default"])
+
+		status, body = doJSON(t, "GET", "/api/v1/prices?specialization=backend", nil, nil)
+		require.Equal(t, fiber.StatusOK, status)
+		list, _ := body["data"].([]any)
+		assert.Len(t, list, 1)
+	})
+
+	t.Run("the same course and period is replaced, not duplicated", func(t *testing.T) {
+		status, _ := doJSON(t, "PUT", "/api/v1/prices", price(500000), admin)
+		require.Equal(t, fiber.StatusOK, status)
+		var count int
+		require.NoError(t, applicantTestDB.QueryRow(context.Background(), `SELECT COUNT(id) FROM prices`).Scan(&count))
+		assert.Equal(t, 1, count)
+	})
+
+	t.Run("delete falls back to the default", func(t *testing.T) {
+		path := fmt.Sprintf("/api/v1/prices/%d", int(id))
+		status, _ := doJSON(t, "DELETE", path, nil, admin)
+		require.Equal(t, fiber.StatusOK, status)
+		status, _ = doJSON(t, "DELETE", path, nil, admin)
+		assert.Equal(t, fiber.StatusNotFound, status)
+		_, body := doJSON(t, "GET", quote, nil, nil)
+		data, _ := body["data"].(map[string]any)
+		assert.Equal(t, 600000.0, data["price"])
 	})
 }

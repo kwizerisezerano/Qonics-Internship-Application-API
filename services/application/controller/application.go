@@ -369,6 +369,12 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		}
 	}
 
+	// The amount is set by the admin-managed prices (course + period), never by the client.
+	amount, _, err := utils.LookupPrice(ctx, tx, req.Specialization, req.DurationMonths)
+	if err != nil {
+		return ac.internalError(c, "Failed to price application", err)
+	}
+
 	// Insert application
 	_, err = tx.Exec(ctx, `
 		INSERT INTO applications (id, reference, applicant_id, department, specialization,
@@ -377,7 +383,7 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`, appID, reference, applicant.ProfileID, req.Department, req.Specialization,
 		req.Motivation, req.Experience, startDate, req.EducationLevel,
-		req.Session, req.DurationMonths, req.WorkMode, req.Amount, "submitted")
+		req.Session, req.DurationMonths, req.WorkMode, amount, "submitted")
 	if err != nil {
 		return ac.internalError(c, "Failed to create application", err)
 	}
@@ -1243,17 +1249,7 @@ func uniqueStrings(values []string) []string {
 // pageParams reads ?page and ?limit with the shared defaults (page 1,
 // limit 10, limit at most 100).
 func pageParams(c *fiber.Ctx) (page, limit int) {
-	page, limit = c.QueryInt("page", 1), c.QueryInt("limit", 10)
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 {
-		limit = 10
-	}
-	if limit > 100 {
-		limit = 100
-	}
-	return page, limit
+	return utils.PageParams(c)
 }
 
 // notifySubmission sends the post-submit notifications (set-password email for

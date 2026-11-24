@@ -38,8 +38,10 @@ func SetupRoutes(app *fiber.App, applicantController *controller.ApplicantContro
 	api.Get("/settings/public", applicantController.GetPublicSettings)
 
 	// Prices: public read, admin write. Public route registered first (see above).
-	api.Get("/prices", applicantController.GetPrices)
-	api.Put("/prices", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.SavePrices)
+	api.Get("/prices", applicantController.ListPrices)
+	api.Get("/prices/quote", applicantController.GetPriceQuote)
+	api.Put("/prices", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.SavePrice)
+	api.Delete("/prices/:id", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.DeletePrice)
 
 	// Settings routes (admin)
 	settings := api.Group("/settings")

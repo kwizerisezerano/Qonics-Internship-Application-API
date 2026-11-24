@@ -1328,34 +1328,37 @@ func TestCreateApplicationAsGuestWithDocuments(t *testing.T) {
 	})
 }
 
-func TestCreateApplicationWithAmount(t *testing.T) {
-	guest := func(amount any) map[string]any {
+func TestCreateApplicationAmountFromPrices(t *testing.T) {
+	ctx := context.Background()
+	_, err := applicationTestDB.Exec(ctx, `DELETE FROM prices WHERE specialization = 'backend'`)
+	require.NoError(t, err)
+
+	apply := func(months int) map[string]any {
 		payload := validApplicationPayload()
 		payload["full_name"] = "Amount Applicant"
 		payload["email"] = fmt.Sprintf("amount-%d@example.com", time.Now().UnixNano())
 		payload["phone"] = "+250788123456"
-		if amount != nil {
-			payload["amount"] = amount
-		}
-		return payload
+		payload["specialization"] = "backend"
+		payload["duration_months"] = months
+		payload["amount"] = 1 // a client-sent amount must be ignored
+		status, body := doJSON(t, "POST", "/api/v1/applications/", payload, nil)
+		require.Equal(t, fiber.StatusOK, status, "body: %v", body)
+		app, _ := body["data"].(map[string]any)
+		return app
 	}
 
-	t.Run("amount from the frontend is stored", func(t *testing.T) {
-		status, body := doJSON(t, "POST", "/api/v1/applications/", guest(20000.5), nil)
-		require.Equal(t, fiber.StatusOK, status, "body: %v", body)
-		app, _ := body["data"].(map[string]any)
-		assert.Equal(t, 20000.5, app["amount"])
+	t.Run("no price set uses 200000 per month", func(t *testing.T) {
+		assert.Equal(t, 400000.0, apply(2)["amount"])
 	})
 
-	t.Run("amount is optional", func(t *testing.T) {
-		status, body := doJSON(t, "POST", "/api/v1/applications/", guest(nil), nil)
-		require.Equal(t, fiber.StatusOK, status, "body: %v", body)
-		app, _ := body["data"].(map[string]any)
-		assert.Nil(t, app["amount"])
-	})
+	t.Run("admin price for the course and period is used", func(t *testing.T) {
+		_, err := applicationTestDB.Exec(ctx, `
+			INSERT INTO prices (department, specialization, duration_months, price)
+			VALUES ('software', 'backend', 3, 450000)`)
+		require.NoError(t, err)
+		defer applicationTestDB.Exec(ctx, `DELETE FROM prices WHERE specialization = 'backend'`)
 
-	t.Run("negative amount is rejected", func(t *testing.T) {
-		status, _ := doJSON(t, "POST", "/api/v1/applications/", guest(-5), nil)
-		assert.Equal(t, fiber.StatusBadRequest, status)
+		assert.Equal(t, 450000.0, apply(3)["amount"])
+		assert.Equal(t, 800000.0, apply(4)["amount"], "other periods still use the default")
 	})
 }

@@ -136,7 +136,6 @@ Public (no token for guests). Same body as today, plus the guest fields:
   "session": "morning",
   "duration_months": 3,
   "work_mode": "remote",
-  "amount": 20000,
 
   "document_ids": ["file-id-1", "file-id-2"],
   "guest_token": "the token from section 3"
@@ -259,7 +258,7 @@ curl -X POST 'BASE/applications' \
     "education_level":"university",
     "session":"morning",
     "duration_months":3,
-    "work_mode":"remote","amount":20000,
+    "work_mode":"remote",
     "document_ids":["FILE_ID","FILE_ID_2"],
     "guest_token":"GUEST_TOKEN"
   }'
@@ -314,15 +313,16 @@ curl -X POST 'BASE/auth/forgot-password' \
 
 Interactive API docs for `POST /applications` are in `openapi.yaml`.
 
-## 10. Amount field
+## 10. Prices by course and period
 
-`POST /applications` accepts an optional `amount` (number, `>= 0`, max 100,000,000). The backend stores it as sent and returns it as `amount` (`null` when not sent). The frontend decides the value, for example the on-site fee.
+Prices belong to a course (specialization) and a period (`duration_months`). The price is the total for that period. A combination an admin has not priced costs 200000 RWF x months.
+
+- `GET /prices/quote?specialization=backend&duration_months=3` (public): `{"price":600000,"currency":"RWF","is_default":true}`. Use it to show the price on the form.
+- `GET /prices?page=1&limit=10&department=software` (public): the admin-set prices, paginated.
+- `PUT /prices` (admin): `{"department":"software","specialization":"backend","duration_months":3,"price":450000,"currency":"RWF"}`. Sending the same course and period again replaces the price.
+- `DELETE /prices/{id}` (admin): that course and period go back to the default.
+
+`POST /applications` does not take an amount. The backend calculates it from the same price and returns it as `amount`.
 
 Suggested text for the on-site morning session:
 "On-site, morning session (09:00 - 11:00): this is a paid session. The fee includes a coffee break."
-
-## 11. Prices
-
-- `GET /prices` (public): `{"data":{"price_per_month":200000,"currency":"RWF"}}`. Default is 200000 RWF per month.
-- `PUT /prices` (admin, Bearer token): body `{"price_per_month":250000}`; `currency` is optional.
-- Show the price on the form and send `amount` (price per month x duration) with `POST /applications`.
