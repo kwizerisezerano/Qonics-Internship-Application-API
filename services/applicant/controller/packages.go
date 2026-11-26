@@ -28,7 +28,7 @@ func (ac *ApplicantController) ListPackages(c *fiber.Ctx) error {
 		err = ac.DB.QueryRow(ctx, `
 			SELECT id, name, description, price, skills, period, currency, is_active
 			FROM packages
-			WHERE id = $1 AND is_active = true
+			WHERE id = $1 AND is_active = true AND deleted_at IS NULL
 		`, id).Scan(&pkg.ID, &pkg.Name, &pkg.Description, &pkg.Price, &pkg.Skills, &pkg.Period, &pkg.Currency, &pkg.IsActive)
 		if err == pgx.ErrNoRows {
 			return utils.JsonErrorResponse(c, fiber.StatusNotFound, "Package not found")
@@ -51,7 +51,7 @@ func (ac *ApplicantController) ListPackages(c *fiber.Ctx) error {
 	rows, err := ac.DB.Query(ctx, `
 		SELECT id, name, description, price, skills, period, currency, is_active
 		FROM packages
-		WHERE is_active = true
+		WHERE is_active = true AND deleted_at IS NULL
 		ORDER BY id
 		LIMIT $1 OFFSET $2`, limit, (page-1)*limit)
 	if err != nil {
@@ -146,7 +146,7 @@ func (ac *ApplicantController) UpdatePackage(c *fiber.Ctx) error {
 	return utils.JsonSuccessResponse(c, "Package updated", req)
 }
 
-// DeletePackage removes a package (admin only)
+// DeletePackage soft-deletes a package (admin only)
 func (ac *ApplicantController) DeletePackage(c *fiber.Ctx) error {
 	idStr := c.Query("id")
 	if idStr == "" {
@@ -158,20 +158,64 @@ func (ac *ApplicantController) DeletePackage(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid package id")
 	}
 
-	var removed int
-	err = ac.DB.QueryRow(context.Background(), `DELETE FROM packages WHERE id = $1 RETURNING id`, id).Scan(&removed)
-	if err == pgx.ErrNoRows {
-		return utils.JsonErrorResponse(c, fiber.StatusNotFound, "Package not found")
-	}
+	result, err := ac.DB.Exec(context.Background(), `
+		UPDATE packages
+		SET deleted_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL
+	`, id)
 	if err != nil {
 		return ac.packagesDBError(c, "Failed to delete package", err)
+	}
+	if result.RowsAffected() == 0 {
+		return utils.JsonErrorResponse(c, fiber.StatusNotFound, "Package not found")
 	}
 
 	userID := utils.CurrentUserID(c)
 	utils.RecordSuccessActivityLog(c, ac.DB, userID, "PACKAGE_DELETE",
-		fmt.Sprintf("Deleted package (package_id=%d, user_id=%d)", removed, userID), nil)
+		fmt.Sprintf("Soft-deleted package (package_id=%d, user_id=%d)", id, userID), nil)
 
 	return utils.JsonSuccessResponse(c, "Package deleted", nil)
+}
+
+// RestorePackage restores a soft-deleted package (admin only)
+func (ac *ApplicantController) RestorePackage(c *fiber.Ctx) error {
+	idStr := c.Query("id")
+	if idStr == "" {
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Package id is required as query parameter")
+	}
+
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id < 1 {
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid package id")
+	}
+
+	result, err := ac.DB.Exec(context.Background(), `
+		UPDATE packages
+		SET deleted_at = NULL
+		WHERE id = $1 AND deleted_at IS NOT NULL
+	`, id)
+	if err != nil {
+		return ac.packagesDBError(c, "Failed to restore package", err)
+	}
+	if result.RowsAffected() == 0 {
+		return utils.JsonErrorResponse(c, fiber.StatusNotFound, "Package not found or not deleted")
+	}
+
+	userID := utils.CurrentUserID(c)
+	utils.RecordSuccessActivityLog(c, ac.DB, userID, "PACKAGE_RESTORE",
+		fmt.Sprintf("Restored package (package_id=%d, user_id=%d)", id, userID), nil)
+
+	var pkg model.Package
+	err = ac.DB.QueryRow(context.Background(), `
+		SELECT id, name, description, price, skills, period, currency, is_active
+		FROM packages
+		WHERE id = $1
+	`, id).Scan(&pkg.ID, &pkg.Name, &pkg.Description, &pkg.Price, &pkg.Skills, &pkg.Period, &pkg.Currency, &pkg.IsActive)
+	if err != nil {
+		return ac.packagesDBError(c, "Failed to fetch restored package", err)
+	}
+
+	return utils.JsonSuccessResponse(c, "Package restored", pkg)
 }
 
 // packagesDBError answers a failed package query with a 500 and logs the cause.

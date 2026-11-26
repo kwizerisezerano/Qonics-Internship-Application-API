@@ -628,6 +628,34 @@
       ]
     },
     {
+      "endpoint": "/packages/restore",
+      "method": "POST",
+      "output_encoding": "no-op",
+      "input_headers": [
+        "Content-Type",
+        "Accept",
+        "Authorization",
+        "authorization"
+      ],
+      "input_query_strings": [
+        "id"
+      ],
+      "backend": [
+        {
+          "host": ["http://applicant:9000"],
+          "url_pattern": "/api/v1/packages/restore",
+          "encoding": "no-op",
+          "disable_host_sanitize": true,
+          "extra_config": {
+            "backend/http": {
+              "return_error_details": "backend_alias",
+              "status": [200, 400, 401, 403, 404, 429, 500]
+            }
+          }
+        }
+      ]
+    },
+    {
       "endpoint": "/applications/mine",
       "method": "GET",
       "output_encoding": "no-op",

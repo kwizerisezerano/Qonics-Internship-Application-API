@@ -34,7 +34,7 @@ func LookupPackage(ctx context.Context, db rowQuerier, packageID int) (*Package,
 	err := db.QueryRow(ctx, `
 		SELECT id, name, description, price, skills, period, currency, is_active
 		FROM packages
-		WHERE id = $1 AND is_active = true
+		WHERE id = $1 AND is_active = true AND deleted_at IS NULL
 	`, packageID).Scan(
 		&pkg.ID,
 		&pkg.Name,
@@ -42,7 +42,7 @@ func LookupPackage(ctx context.Context, db rowQuerier, packageID int) (*Package,
 		&pkg.Price,
 		&pkg.Skills,
 		&pkg.Period,
-		&pkg.Currency,
+		pkg.Currency,
 		&pkg.IsActive,
 	)
 	if err != nil {

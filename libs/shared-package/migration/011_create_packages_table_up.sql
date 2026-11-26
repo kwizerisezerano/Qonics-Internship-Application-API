@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS packages (
     period VARCHAR(20) NOT NULL DEFAULT 'monthly' CHECK (period IN ('monthly', 'yearly', 'quarterly')),
     currency VARCHAR(3) NOT NULL DEFAULT 'RWF',
     is_active BOOLEAN DEFAULT true,
+    deleted_at TIMESTAMP WITH TIME ZONE, -- Soft delete support
     updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -17,6 +18,9 @@ CREATE TABLE IF NOT EXISTS packages (
 
 CREATE TRIGGER update_packages_updated_at BEFORE UPDATE ON packages
 FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Add index for faster filtering of non-deleted packages
+CREATE INDEX IF NOT EXISTS idx_packages_not_deleted ON packages (deleted_at) WHERE deleted_at IS NULL;
 
 -- Add package_id to applications table
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS package_id INTEGER REFERENCES packages(id) ON DELETE SET NULL;

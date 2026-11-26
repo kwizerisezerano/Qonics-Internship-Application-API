@@ -74,6 +74,20 @@ func init() {
 		panic("Failed to reset settings: " + err.Error())
 	}
 
+	// Add deleted_at column to packages table for soft delete support
+	if _, err := db.Exec(context.Background(), `
+		ALTER TABLE packages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE
+	`); err != nil {
+		panic("Failed to add deleted_at column: " + err.Error())
+	}
+
+	// Create index for filtering non-deleted packages
+	if _, err := db.Exec(context.Background(), `
+		CREATE INDEX IF NOT EXISTS idx_packages_not_deleted ON packages (deleted_at) WHERE deleted_at IS NULL
+	`); err != nil {
+		panic("Failed to create index: " + err.Error())
+	}
+
 	controller := NewApplicantController(db, cfg)
 
 	applicantTestApp = fiber.New(fiber.Config{AppName: "applicant-service-test"})
@@ -101,6 +115,7 @@ func init() {
 	applicantTestApp.Post("/api/v1/packages", auth, middleware.AdminMiddleware(), controller.SavePackage)
 	applicantTestApp.Put("/api/v1/packages", auth, middleware.AdminMiddleware(), controller.UpdatePackage)
 	applicantTestApp.Delete("/api/v1/packages", auth, middleware.AdminMiddleware(), controller.DeletePackage)
+	applicantTestApp.Post("/api/v1/packages/restore", auth, middleware.AdminMiddleware(), controller.RestorePackage)
 
 	settings := applicantTestApp.Group("/api/v1/settings", auth, middleware.AdminMiddleware())
 	settings.Get("/", controller.GetSettings)
@@ -839,6 +854,7 @@ func TestUnauthorizedAccess(t *testing.T) {
 		{"POST", "/api/v1/packages"},
 		{"PUT", "/api/v1/packages?id=1"},
 		{"DELETE", "/api/v1/packages?id=1"},
+		{"POST", "/api/v1/packages/restore?id=1"},
 	}
 
 	for _, ep := range endpoints {
@@ -1072,12 +1088,36 @@ func TestPackagesRoutes(t *testing.T) {
 		assert.Equal(t, 200000.0, data["price"])
 	})
 
+	var deleteID float64
+	t.Run("admin creates package for delete test", func(t *testing.T) {
+		status, body := doJSON(t, "POST", "/api/v1/packages", pkg("Delete Test Package", 175000), admin)
+		require.Equal(t, fiber.StatusOK, status)
+		data, _ := body["data"].(map[string]any)
+		deleteID, _ = data["id"].(float64)
+	})
+
 	t.Run("admin can delete package", func(t *testing.T) {
-		path := fmt.Sprintf("/api/v1/packages?id=%d", int(id))
+		path := fmt.Sprintf("/api/v1/packages?id=%d", int(deleteID))
 		status, _ := doJSON(t, "DELETE", path, nil, admin)
 		require.Equal(t, fiber.StatusOK, status)
 
+		// Soft delete: package should still exist but not appear in list
 		status, _ = doJSON(t, "GET", path, nil, nil)
-		assert.Equal(t, fiber.StatusNotFound, status)
+		assert.Equal(t, fiber.StatusNotFound, status, "soft-deleted package should not be accessible via public endpoint")
+	})
+
+	t.Run("admin can restore package", func(t *testing.T) {
+		path := fmt.Sprintf("/api/v1/packages/restore?id=%d", int(deleteID))
+		status, body := doJSON(t, "POST", path, nil, admin)
+		require.Equal(t, fiber.StatusOK, status)
+		data, _ := body["data"].(map[string]any)
+		assert.Equal(t, "Delete Test Package", data["name"])
+
+		// Verify restored package is accessible again
+		path = fmt.Sprintf("/api/v1/packages?id=%d", int(deleteID))
+		status, body = doJSON(t, "GET", path, nil, nil)
+		require.Equal(t, fiber.StatusOK, status)
+		data, _ = body["data"].(map[string]any)
+		assert.Equal(t, "Delete Test Package", data["name"])
 	})
 }
