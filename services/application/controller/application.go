@@ -124,7 +124,7 @@ func (ac *ApplicationController) ListAll(c *fiber.Ctx) error {
 		applications = []model.Application{}
 	}
 
-	byDepartment, err := ac.applicationsByDepartment(ctx, whereClause, params)
+	byPackage, err := ac.applicationsByPackage(ctx, whereClause, params)
 	if err != nil {
 		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch applications", utils.Logger{
 			LogLevel:    utils.CRITICAL,
@@ -142,21 +142,11 @@ func (ac *ApplicationController) ListAll(c *fiber.Ctx) error {
 		})
 	}
 
-	bySpecialization, err := ac.applicationsBySpecialization(ctx, whereClause, params)
-	if err != nil {
-		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch applications", utils.Logger{
-			LogLevel:    utils.CRITICAL,
-			Message:     err.Error(),
-			ServiceName: ac.Config.ServiceName,
-		})
-	}
-
 	return utils.JsonPaginatedSuccessResponse(c, "Applications retrieved", model.ListAllResponse{
-		Applications:     applications,
-		Summary:          summary,
-		ByDepartment:     byDepartment,
-		BySpecialization: bySpecialization,
-		Trends:           trends,
+		Applications: applications,
+		Summary:      summary,
+		ByPackage:    byPackage,
+		Trends:       trends,
 	}, utils.GeneratePaginationData(summary.Total, filter.Limit, filter.Page))
 }
 
@@ -324,7 +314,7 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		ownerID = fmt.Sprintf("%d", user.ID)
 	}
 
-	// One applicant can't hold two live applications for the same track. The
+	// One applicant can't hold two live applications for the same package. The
 	// per-applicant lock makes a double-click submit wait for the first one.
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('applicant:' || $1))`, applicant.ProfileID); err != nil {
 		return ac.internalError(c, "Failed to create application", err)
@@ -332,16 +322,25 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 	var existingRef string
 	err = tx.QueryRow(ctx, `
 		SELECT reference FROM applications
-		WHERE applicant_id = $1 AND department = $2 AND specialization = $3 AND status <> 'rejected'
+		WHERE applicant_id = $1 AND package_id = $2 AND status <> 'rejected'
 		LIMIT 1
-	`, applicant.ProfileID, req.Department, req.Specialization).Scan(&existingRef)
+	`, applicant.ProfileID, req.PackageID).Scan(&existingRef)
 	if err == nil {
 		// Known error - duplicate application, no logging
 		return utils.JsonErrorResponse(c, fiber.StatusConflict, fmt.Sprintf(
-			"You already have an application for %s (%s).", model.DisplayName(req.Specialization), existingRef))
+			"You already have an application for this package (%s).", existingRef))
 	}
 	if err != pgx.ErrNoRows {
 		return ac.internalError(c, "Failed to create application", err)
+	}
+
+	// Lookup the package to get price, duration, and skills
+	pkg, err := utils.LookupPackage(ctx, tx, req.PackageID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return utils.JsonErrorResponse(c, fiber.StatusNotFound, "Package not found")
+		}
+		return ac.internalError(c, "Failed to lookup package", err)
 	}
 
 	// On-site and hybrid interns need a seat in their daily session for the
@@ -351,7 +350,7 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('session:' || $1))`, req.Session); err != nil {
 			return ac.internalError(c, "Failed to create application", err)
 		}
-		endDate := startDate.AddDate(0, req.DurationMonths, 0)
+		endDate := startDate.AddDate(0, pkg.DurationMonths, 0)
 		var taken int
 		err = tx.QueryRow(ctx, `
 			SELECT COUNT(id) FROM applications
@@ -369,21 +368,18 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		}
 	}
 
-	// The amount is set by the admin-managed prices (course + period), never by the client.
-	amount, _, err := utils.LookupPrice(ctx, tx, req.Specialization, req.DurationMonths)
-	if err != nil {
-		return ac.internalError(c, "Failed to price application", err)
-	}
+	// The amount is set by the package pricing, never by the client.
+	amount := pkg.Price
 
-	// Insert application
+	// Insert application with package details
 	_, err = tx.Exec(ctx, `
-		INSERT INTO applications (id, reference, applicant_id, department, specialization,
+		INSERT INTO applications (id, reference, applicant_id, package_id, skills,
 			motivation, experience, start_date, education_level, session,
 			duration_months, work_mode, amount, status)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-	`, appID, reference, applicant.ProfileID, req.Department, req.Specialization,
+	`, appID, reference, applicant.ProfileID, req.PackageID, pkg.Skills,
 		req.Motivation, req.Experience, startDate, req.EducationLevel,
-		req.Session, req.DurationMonths, req.WorkMode, amount, "submitted")
+		req.Session, pkg.DurationMonths, req.WorkMode, amount, "submitted")
 	if err != nil {
 		return ac.internalError(c, "Failed to create application", err)
 	}
@@ -426,12 +422,12 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 
 	// Record the submission in the audit trail (leazi-style activity log).
 	utils.RecordSuccessActivityLog(c, ac.DB, user.ID, "APPLICATION_SUBMIT",
-		fmt.Sprintf("Submitted application (application_id=%s, user_id=%d, reference=%s) for %s - %s", appID, user.ID, reference, req.Department, req.Specialization),
+		fmt.Sprintf("Submitted application (application_id=%s, user_id=%d, reference=%s) for package %s", appID, user.ID, reference, pkg.Name),
 		map[string]any{
 			"application_id": appID,
 			"reference":      reference,
-			"department":     req.Department,
-			"specialization": req.Specialization,
+			"package_id":     req.PackageID,
+			"package_name":   pkg.Name,
 		})
 
 	// Notifications go out in the background: Redis being slow or down must never
@@ -855,8 +851,13 @@ func (ac *ApplicationController) parseFilter(c *fiber.Ctx, applicantID string) (
 		whereClause = utils.AppendCondition(whereClause, fmt.Sprintf("a.applicant_id = $%d", len(params)))
 	}
 
+	// Add LEFT JOIN for packages table if search is active
+	if filter.Search != "" {
+		whereClause = utils.AppendCondition(whereClause, "LEFT JOIN packages p ON a.package_id = p.id")
+	}
+
 	whereClause, params = utils.AppendSearchClause(whereClause, params,
-		[]string{"a.reference", "a.department", "a.specialization"},
+		[]string{"a.reference", "p.name"},
 		[]string{"ap.full_name_hash", "ap.email_hash"},
 		filter.Search,
 	)
@@ -899,57 +900,30 @@ func (ac *ApplicationController) applicationSummary(ctx context.Context, whereCl
 	return s, err
 }
 
-// applicationsByDepartment aggregates the filtered applications by department,
+// applicationsByPackage aggregates the filtered applications by package,
 // most applications first.
-func (ac *ApplicationController) applicationsByDepartment(ctx context.Context, whereClause string, params []any) ([]model.DepartmentCount, error) {
+func (ac *ApplicationController) applicationsByPackage(ctx context.Context, whereClause string, params []any) ([]model.PackageCount, error) {
 	rows, err := ac.DB.Query(ctx, `
-		SELECT a.department, COUNT(a.id)
+		SELECT a.package_id, p.name as package_name, COUNT(a.id)
 		FROM applications a
 		JOIN applicant_profiles ap ON a.applicant_id = ap.id
+		LEFT JOIN packages p ON a.package_id = p.id
 	`+whereClause+`
-		GROUP BY a.department
-		ORDER BY COUNT(a.id) DESC, a.department ASC
+		GROUP BY a.package_id, p.name
+		ORDER BY COUNT(a.id) DESC, a.package_id ASC
 	`, params...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	counts := []model.DepartmentCount{}
+	counts := []model.PackageCount{}
 	for rows.Next() {
-		var dc model.DepartmentCount
-		if err := rows.Scan(&dc.Department, &dc.Count); err != nil {
+		var pc model.PackageCount
+		if err := rows.Scan(&pc.PackageID, &pc.PackageName, &pc.Count); err != nil {
 			return nil, err
 		}
-		counts = append(counts, dc)
-	}
-	return counts, nil
-}
-
-// applicationsBySpecialization aggregates the filtered applications by
-// department and specialization, most applications first within each
-// department.
-func (ac *ApplicationController) applicationsBySpecialization(ctx context.Context, whereClause string, params []any) ([]model.SpecializationCount, error) {
-	rows, err := ac.DB.Query(ctx, `
-		SELECT a.department, a.specialization, COUNT(a.id)
-		FROM applications a
-		JOIN applicant_profiles ap ON a.applicant_id = ap.id
-	`+whereClause+`
-		GROUP BY a.department, a.specialization
-		ORDER BY a.department ASC, COUNT(a.id) DESC, a.specialization ASC
-	`, params...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	counts := []model.SpecializationCount{}
-	for rows.Next() {
-		var sc model.SpecializationCount
-		if err := rows.Scan(&sc.Department, &sc.Specialization, &sc.Count); err != nil {
-			return nil, err
-		}
-		counts = append(counts, sc)
+		counts = append(counts, pc)
 	}
 	return counts, nil
 }
@@ -992,7 +966,8 @@ func (ac *ApplicationController) applicationTrends(ctx context.Context, whereCla
 // PII is decrypted in the query itself so a list costs one round trip instead
 // of three extra per row.
 var applicationSelect = `
-	SELECT a.id, a.reference, a.applicant_id, a.department, a.specialization,
+	SELECT a.id, a.reference, a.applicant_id, a.package_id, p.name as package_name,
+	       a.department, a.specialization, a.skills,
 	       a.motivation, a.experience, a.start_date, a.education_level,
 	       a.session, a.duration_months, a.work_mode, a.amount, a.status,
 	       a.submitted_at, a.interview_at,
@@ -1007,6 +982,7 @@ var applicationSelect = `
 	       COALESCE(ap.portfolio_url, '')
 	FROM applications a
 	JOIN applicant_profiles ap ON a.applicant_id = ap.id
+	LEFT JOIN packages p ON a.package_id = p.id
 `
 
 // queryApplications runs the shared application query with an optional
@@ -1062,7 +1038,8 @@ func scanApplications(rows pgx.Rows) ([]model.Application, error) {
 		var interviewAt *time.Time
 
 		err := rows.Scan(
-			&app.ID, &app.Reference, &app.Applicant.ID, &app.Department, &app.Specialization,
+			&app.ID, &app.Reference, &app.Applicant.ID, &app.PackageID, &app.PackageName,
+			&app.Department, &app.Specialization, &app.Skills,
 			&app.Motivation, &app.Experience, &startDate, &app.EducationLevel,
 			&app.Session, &app.DurationMonths, &app.WorkMode, &app.Amount, &app.Status,
 			&submittedAt, &interviewAt,
@@ -1267,8 +1244,12 @@ func (ac *ApplicationController) notifySubmission(userID int, applicant applican
 		ac.sendGuestAccessEmail(ctx, userID, req.FullName, req.Email)
 	}
 
-	departmentName := model.DisplayName(req.Department)
-	specializationName := model.DisplayName(req.Specialization)
+	// Lookup package details for notification
+	pkg, err := utils.LookupPackage(ctx, ac.DB, req.PackageID)
+	if err != nil {
+		fmt.Printf("WARNING: Failed to lookup package for notification: %v\n", err)
+		pkg = &utils.Package{Name: "Unknown Package"}
+	}
 
 	applicantName := applicant.Name
 	if applicantName == "" {
@@ -1276,28 +1257,26 @@ func (ac *ApplicationController) notifySubmission(userID int, applicant applican
 	}
 
 	applicantSubject := "Application Submitted Successfully"
-	applicantMessage := fmt.Sprintf("Your application for %s - %s has been submitted successfully and is awaiting review. You will be notified once it has been reviewed. Reference: %s", departmentName, specializationName, reference)
+	applicantMessage := fmt.Sprintf("Your application for %s has been submitted successfully and is awaiting review. You will be notified once it has been reviewed. Reference: %s", pkg.Name, reference)
 	if err := utils.PublishInAppNotification(ctx, ac.Redis, userID, applicantSubject, applicantMessage); err != nil {
 		fmt.Printf("WARNING: Failed to send application submission notification: %v\n", err)
 	}
 	if applicant.Email != "" {
 		if err := utils.PublishTemplatedEmailNotification(ctx, ac.Redis, applicant.Email, applicantSubject, "application_submitted", map[string]any{
-			"name":           applicantName,
-			"reference":      reference,
-			"department":     departmentName,
-			"specialization": specializationName,
+			"name":      applicantName,
+			"reference": reference,
+			"package":   pkg.Name,
 		}); err != nil {
 			fmt.Printf("WARNING: Failed to send application submission email: %v\n", err)
 		}
 	}
 
 	adminSubject := "New Application Submitted"
-	adminMessage := fmt.Sprintf("%s submitted an application for %s - %s. Reference: %s", applicantName, departmentName, specializationName, reference)
+	adminMessage := fmt.Sprintf("%s submitted an application for %s. Reference: %s", applicantName, pkg.Name, reference)
 	if err := utils.NotifyAdmins(ctx, ac.DB, ac.Redis, adminSubject, adminMessage, "admin_new_application", map[string]any{
 		"applicant_name": applicantName,
 		"reference":      reference,
-		"department":     departmentName,
-		"specialization": specializationName,
+		"package":        pkg.Name,
 		"login_url":      ac.Config.WebURL,
 	}); err != nil {
 		fmt.Printf("WARNING: Failed to notify admins of new application: %v\n", err)

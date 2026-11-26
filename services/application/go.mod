@@ -4,7 +4,6 @@ go 1.26.0
 
 require (
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible
-	github.com/go-playground/validator/v10 v10.30.6
 	github.com/gofiber/fiber/v2 v2.52.8
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.5
@@ -12,6 +11,8 @@ require (
 	github.com/redis/go-redis/v9 v9.10.0
 	github.com/stretchr/testify v1.10.0
 )
+
+require github.com/go-playground/validator/v10 v10.30.6 // indirect
 
 require (
 	github.com/andybalholm/brotli v1.1.0 // indirect

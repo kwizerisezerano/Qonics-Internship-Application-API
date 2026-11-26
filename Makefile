@@ -10,7 +10,7 @@ up:
 	@echo "Docker images started"
 
 ## up_build: stops docker compose (if running), builds all projects with tests, and starts docker compose
-up_build: test_db shared-package auth applicant application notification file
+up_build: recreate_postgres_test shared-package auth applicant application notification file
 	@echo "Stopping docker images (if running...)"
 	docker compose down
 	@echo "Building (when required) and starting docker images..."
@@ -39,7 +39,7 @@ stop:
 auth:
 	@echo "Building auth service binary..."
 	cd ./services/auth && go mod tidy
-	cd ./services/auth && go test -v ./...
+	cd ./services/auth/controller && go test -v
 	cd ./services/auth && env GOOS=linux CGO_ENABLED=0 go build -o ${APP_BINARY} -buildvcs=false
 	@echo "Done!"
 
@@ -47,7 +47,7 @@ auth:
 applicant:
 	@echo "Building applicant service binary..."
 	cd ./services/applicant && go mod tidy
-	cd ./services/applicant && go test -v ./...
+	cd ./services/applicant/controller && go test -v
 	cd ./services/applicant && env GOOS=linux CGO_ENABLED=0 go build -o ${APP_BINARY} -buildvcs=false
 	@echo "Done!"
 
@@ -55,7 +55,7 @@ applicant:
 application:
 	@echo "Building application service binary..."
 	cd ./services/application && go mod tidy
-	cd ./services/application && go test -v ./...
+	cd ./services/application/controller && go test -v
 	cd ./services/application && env GOOS=linux CGO_ENABLED=0 go build -o ${APP_BINARY} -buildvcs=false
 	@echo "Done!"
 
@@ -63,7 +63,7 @@ application:
 notification:
 	@echo "Building notification worker binary..."
 	cd ./services/notification && go mod tidy
-	cd ./services/notification && go test -v
+	cd ./services/notification/controller && go test -v
 	cd ./services/notification && env GOOS=linux CGO_ENABLED=0 go build -o ${APP_BINARY} -buildvcs=false
 	@echo "Done!"
 
@@ -71,7 +71,7 @@ notification:
 file:
 	@echo "Building file service binary..."
 	cd ./services/file && go mod tidy
-	cd ./services/file && go test -v ./...
+	cd ./services/file/controller && go test -v
 	cd ./services/file && env GOOS=linux CGO_ENABLED=0 go build -o ${APP_BINARY} -buildvcs=false
 	@echo "Done!"
 

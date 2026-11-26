@@ -226,10 +226,10 @@ func seedApplication(t *testing.T, profileID string) string {
 	t.Helper()
 	appID := uuid.New().String()
 	_, err := applicationTestDB.Exec(context.Background(), `
-		INSERT INTO applications (id, reference, applicant_id, department, specialization,
+		INSERT INTO applications (id, reference, applicant_id, package_id, skills,
 			motivation, experience, education_level, session, duration_months, work_mode, status)
-		VALUES ($1, $2, $3, 'software', 'backend', 'Build things', '2 years',
-			'university', 'morning', 6, 'remote', 'submitted')
+		VALUES ($1, $2, $3, 1, ARRAY['coding', 'design'], 'Build things', '2 years',
+			'university', 'morning', 3, 'remote', 'submitted')
 	`, appID, fmt.Sprintf("APP-%s", uniqueSuffix()), profileID)
 	require.NoError(t, err)
 	return appID
@@ -251,14 +251,12 @@ func seedOwnedFile(t *testing.T, ownerUserID int) string {
 // validApplicationPayload returns a payload that passes validation.
 func validApplicationPayload() map[string]any {
 	return map[string]any{
-		"department":      "software",
-		"specialization":  "backend",
+		"package_id":      1,
 		"motivation":      "I want to learn",
 		"experience":      "2 years",
 		"start_date":      "2026-01-15T00:00:00Z",
 		"education_level": "university",
 		"session":         "morning",
-		"duration_months": 6,
 		"work_mode":       "remote",
 	}
 }
@@ -294,13 +292,13 @@ func TestCreateApplicationRoute(t *testing.T) {
 			payload:    map[string]any{},
 			wantStatus: fiber.StatusBadRequest,
 			check: func(t *testing.T, body map[string]any) {
-				assert.True(t, hasValidationError(body, "department"), "expected department error: %v", body)
+				assert.True(t, hasValidationError(body, "package_id"), "expected package_id error: %v", body)
 			},
 		},
 		{
 			name:       "validation - missing motivation",
 			headers:    auth,
-			payload:    map[string]any{"department": "software", "specialization": "backend", "experience": "2 years", "education_level": "university", "session": "morning", "duration_months": 6, "work_mode": "remote"},
+			payload:    map[string]any{"package_id": 1, "experience": "2 years", "education_level": "university", "session": "morning", "work_mode": "remote"},
 			wantStatus: fiber.StatusBadRequest,
 			check: func(t *testing.T, body map[string]any) {
 				assert.True(t, hasValidationError(body, "motivation"), "expected motivation error: %v", body)
@@ -309,19 +307,19 @@ func TestCreateApplicationRoute(t *testing.T) {
 		{
 			name:       "validation - missing experience",
 			headers:    auth,
-			payload:    map[string]any{"department": "software", "specialization": "backend", "motivation": "I want to learn", "education_level": "university", "session": "morning", "duration_months": 6, "work_mode": "remote"},
+			payload:    map[string]any{"package_id": 1, "motivation": "I want to learn", "education_level": "university", "session": "morning", "work_mode": "remote"},
 			wantStatus: fiber.StatusBadRequest,
 			check: func(t *testing.T, body map[string]any) {
 				assert.True(t, hasValidationError(body, "experience"), "expected experience error: %v", body)
 			},
 		},
 		{
-			name:       "validation - missing specialization",
+			name:       "validation - invalid package_id",
 			headers:    auth,
-			payload:    map[string]any{"department": "software", "motivation": "I want to learn", "experience": "2 years", "education_level": "university", "session": "morning", "duration_months": 6, "work_mode": "remote"},
+			payload:    map[string]any{"package_id": -1, "motivation": "I want to learn", "experience": "2 years", "education_level": "university", "session": "morning", "work_mode": "remote"},
 			wantStatus: fiber.StatusBadRequest,
 			check: func(t *testing.T, body map[string]any) {
-				assert.True(t, hasValidationError(body, "specialization"), "expected specialization error: %v", body)
+				assert.True(t, hasValidationError(body, "package_id"), "expected package_id error: %v", body)
 			},
 		},
 		{
@@ -404,7 +402,7 @@ func TestCreateApplicationRoute(t *testing.T) {
 			check: func(t *testing.T, body map[string]any) {
 				data, ok := body["data"].(map[string]any)
 				require.True(t, ok, "response should have data: %v", body)
-				assert.Equal(t, "software", data["department"])
+				assert.NotNil(t, data["package_id"])
 				assert.NotEmpty(t, data["reference"])
 			},
 		},
@@ -820,14 +818,14 @@ func TestListAllRoute(t *testing.T) {
 				data, ok := body["data"].(map[string]any)
 				require.True(t, ok, "response should have data: %v", body)
 				assert.NotNil(t, data["summary"], "data should carry a summary: %v", data)
-				assert.NotNil(t, data["by_department"], "data should carry by_department: %v", data)
+				assert.NotNil(t, data["by_package"], "data should carry by_package: %v", data)
 				assert.NotNil(t, body["meta"], "response should carry pagination meta: %v", body)
 			},
 		},
 		{
 			name:       "success - filters applied",
 			headers:    authHeaders(1, "admin"),
-			path:       "/api/v1/applications/?department=software&status=submitted",
+			path:       "/api/v1/applications/?package_id=1&status=submitted",
 			wantStatus: fiber.StatusOK,
 		},
 	}
@@ -976,7 +974,7 @@ func TestParseFilterInvalidDate(t *testing.T) {
 }
 
 // TestCreateApplicationDuplicate: an applicant can't hold two live
-// applications for the same specialization, but can apply for another one,
+// applications for the same package, but can apply for another one,
 // and can re-apply once the earlier application was rejected.
 func TestCreateApplicationDuplicate(t *testing.T) {
 	profile := seedProfile(t)
@@ -991,9 +989,9 @@ func TestCreateApplicationDuplicate(t *testing.T) {
 	assert.Contains(t, body["message"], "already have an application")
 
 	other := validApplicationPayload()
-	other["specialization"] = "frontend"
+	other["package_id"] = 2
 	status, body = doJSON(t, "POST", "/api/v1/applications/", other, auth)
-	assert.Equal(t, fiber.StatusOK, status, "a different specialization is allowed: %v", body)
+	assert.Equal(t, fiber.StatusOK, status, "a different package is allowed: %v", body)
 
 	_, err := applicationTestDB.Exec(context.Background(), `UPDATE applications SET status = 'rejected' WHERE id = $1`, firstID)
 	require.NoError(t, err)
@@ -1013,7 +1011,6 @@ func TestCreateApplicationSeatCapacity(t *testing.T) {
 		p["work_mode"] = workMode
 		p["session"] = "afternoon"
 		p["start_date"] = startAt.Format(time.RFC3339)
-		p["duration_months"] = 3
 		return p
 	}
 	submit := func(p map[string]any) (int, map[string]any) {
@@ -1328,37 +1325,33 @@ func TestCreateApplicationAsGuestWithDocuments(t *testing.T) {
 	})
 }
 
-func TestCreateApplicationAmountFromPrices(t *testing.T) {
+func TestCreateApplicationAmountFromPackages(t *testing.T) {
 	ctx := context.Background()
-	_, err := applicationTestDB.Exec(ctx, `DELETE FROM prices WHERE specialization = 'backend'`)
+	_, err := applicationTestDB.Exec(ctx, `DELETE FROM packages WHERE name = 'Test Package'`)
 	require.NoError(t, err)
 
-	apply := func(months int) map[string]any {
+	apply := func(packageID int) map[string]any {
 		payload := validApplicationPayload()
 		payload["full_name"] = "Amount Applicant"
 		payload["email"] = fmt.Sprintf("amount-%d@example.com", time.Now().UnixNano())
 		payload["phone"] = "+250788123456"
-		payload["specialization"] = "backend"
-		payload["duration_months"] = months
-		payload["amount"] = 1 // a client-sent amount must be ignored
+		payload["package_id"] = packageID
 		status, body := doJSON(t, "POST", "/api/v1/applications/", payload, nil)
 		require.Equal(t, fiber.StatusOK, status, "body: %v", body)
 		app, _ := body["data"].(map[string]any)
 		return app
 	}
 
-	t.Run("no price set uses 200000 per month", func(t *testing.T) {
-		assert.Equal(t, 400000.0, apply(2)["amount"])
-	})
-
-	t.Run("admin price for the course and period is used", func(t *testing.T) {
-		_, err := applicationTestDB.Exec(ctx, `
-			INSERT INTO prices (department, specialization, duration_months, price)
-			VALUES ('software', 'backend', 3, 450000)`)
+	t.Run("package price is used", func(t *testing.T) {
+		var pkgID int
+		err := applicationTestDB.QueryRow(ctx, `
+			INSERT INTO packages (name, description, price, skills, duration_months, currency)
+			VALUES ('Test Package', 'Test', 250000, ARRAY['coding', 'design'], 3, 'RWF')
+			RETURNING id
+		`).Scan(&pkgID)
 		require.NoError(t, err)
-		defer applicationTestDB.Exec(ctx, `DELETE FROM prices WHERE specialization = 'backend'`)
+		defer applicationTestDB.Exec(ctx, `DELETE FROM packages WHERE id = $1`, pkgID)
 
-		assert.Equal(t, 450000.0, apply(3)["amount"])
-		assert.Equal(t, 800000.0, apply(4)["amount"], "other periods still use the default")
+		assert.Equal(t, 250000.0, apply(pkgID)["amount"])
 	})
 }

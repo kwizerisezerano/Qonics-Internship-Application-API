@@ -3,39 +3,24 @@ package model
 import (
 	"time"
 
-	"github.com/go-playground/validator/v10"
 	"github.com/qonics/qonics-appy-api/libs/shared-package/utils"
 )
 
-// Specializations is the canonical taxonomy: each department mapped to the
-// specialization values it accepts. Kept in sync with the frontend DEPARTMENTS
-// config and used to validate incoming payloads.
-var Specializations = utils.Specializations
-
-// Validate is the validator used for incoming application payloads. In addition
-// to the struct tags it carries the custom `specialization` rule below.
+// Validate is the validator used for incoming application payloads.
 var Validate = utils.NewValidator()
 
 func init() {
-	// specialization passes only when the value belongs to the payload's
-	// department (e.g. department "iot" rejects "backend").
-	Validate.RegisterValidation("specialization", func(fl validator.FieldLevel) bool {
-		department := fl.Parent().FieldByName("Department").String()
-		for _, s := range Specializations[department] {
-			if s == fl.Field().String() {
-				return true
-			}
-		}
-		return false
-	})
+	// No custom validations needed for package-based model
 }
 
 type Application struct {
 	ID             string                `json:"id"`
 	Reference      string                `json:"reference"`
 	Applicant      ApplicantSummary      `json:"applicant"`
-	Department     string                `json:"department"`
-	Specialization string                `json:"specialization"`
+	PackageID      *int                  `json:"package_id,omitempty"`
+	PackageName    string                `json:"package_name,omitempty"`
+	Department     string                `json:"department"`     // Kept for historical records
+	Specialization string                `json:"specialization"` // Kept for historical records
 	Motivation     string                `json:"motivation"`
 	Experience     string                `json:"experience"`
 	StartDate      *string               `json:"start_date,omitempty"`
@@ -44,6 +29,7 @@ type Application struct {
 	DurationMonths int                   `json:"duration_months"`
 	WorkMode       string                `json:"work_mode"`
 	Amount         *float64              `json:"amount"`
+	Skills         []string              `json:"skills,omitempty"`
 	Status         string                `json:"status"`
 	SubmittedAt    string                `json:"submitted_at"`
 	InterviewAt    *string               `json:"interview_at,omitempty"`
@@ -91,18 +77,11 @@ type MineResponse struct {
 	Summary      ApplicationSummary `json:"summary"`
 }
 
-// DepartmentCount is the number of applications for a single department.
-type DepartmentCount struct {
-	Department string `json:"department"`
-	Count      int    `json:"count"`
-}
-
-// SpecializationCount is the number of applications for a single
-// department + specialization pair.
-type SpecializationCount struct {
-	Department     string `json:"department"`
-	Specialization string `json:"specialization"`
-	Count          int    `json:"count"`
+// PackageCount is the number of applications for a single package.
+type PackageCount struct {
+	PackageID   int    `json:"package_id"`
+	PackageName string `json:"package_name"`
+	Count       int    `json:"count"`
 }
 
 // TrendPoint is the number of applications submitted in a single month.
@@ -112,14 +91,13 @@ type TrendPoint struct {
 }
 
 // ListAllResponse is the payload for GET /applications (admin): every
-// application plus the dashboard aggregates (status summary, per-department
-// counts, per-specialization counts and the last twelve months trend).
+// application plus the dashboard aggregates (status summary, per-package
+// counts and the last twelve months trend).
 type ListAllResponse struct {
-	Applications     []Application         `json:"applications"`
-	Summary          ApplicationSummary    `json:"summary"`
-	ByDepartment     []DepartmentCount     `json:"by_department"`
-	BySpecialization []SpecializationCount `json:"by_specialization"`
-	Trends           []TrendPoint          `json:"trends"`
+	Applications []Application      `json:"applications"`
+	Summary      ApplicationSummary `json:"summary"`
+	ByPackage    []PackageCount     `json:"by_package"`
+	Trends       []TrendPoint       `json:"trends"`
 }
 
 // ApplicationFilter is the query contract for the application list endpoints
@@ -131,13 +109,13 @@ type ApplicationFilter struct {
 	Page  int `query:"page"`
 	Limit int `query:"limit"`
 
-	// Search matches reference / department / specialization (ILIKE) and the
+	// Search matches reference / package_name (ILIKE) and the
 	// applicant full_name_hash / email_hash columns.
 	Search string `query:"search"`
 
-	Reference  string `query:"reference" field:"a.reference" op:"ILIKE" validate:"omitempty,max=100"`
-	Department string `query:"department" field:"a.department" op:"=" validate:"omitempty"`
-	Status     string `query:"status" field:"a.status" op:"=" validate:"omitempty,oneof=submitted under_review shortlisted interview accepted rejected"`
+	Reference string `query:"reference" field:"a.reference" op:"ILIKE" validate:"omitempty,max=100"`
+	PackageID int    `query:"package_id" field:"a.package_id" op:"=" validate:"omitempty,min=1"`
+	Status    string `query:"status" field:"a.status" op:"=" validate:"omitempty,oneof=submitted under_review shortlisted interview accepted rejected"`
 
 	// Submission date range. Parsed into time.Time in the controller so pgx
 	// binds them as timestamptz; query:"-" keeps Fiber's decoder away from them.
@@ -174,14 +152,14 @@ type NewApplicationPayload struct {
 	Email    string `json:"email" validate:"omitempty,email"`
 	Phone    string `json:"phone" validate:"omitempty,max=30,phone"`
 
-	Department     string   `json:"department" validate:"required,oneof=software iot"`
-	Specialization string   `json:"specialization" validate:"required,specialization"`
+	// Package selection replaces department/specialization/duration_months
+	PackageID int `json:"package_id" validate:"required,min=1"`
+
 	Motivation     string   `json:"motivation" validate:"required,max=2000"`
 	Experience     string   `json:"experience" validate:"required,max=2000"`
 	StartDate      string   `json:"start_date"`
 	EducationLevel string   `json:"education_level" validate:"required,oneof=university high_school"`
 	Session        string   `json:"session" validate:"required,oneof=morning afternoon"`
-	DurationMonths int      `json:"duration_months" validate:"required,min=1"`
 	WorkMode       string   `json:"work_mode" validate:"required,oneof=onsite remote hybrid"`
 	DocumentIDs    []string `json:"document_ids" validate:"omitempty,dive,uuid"`
 	// GuestToken proves ownership of documents a guest uploaded before applying
@@ -197,6 +175,17 @@ type StatusUpdatePayload struct {
 
 type AddNoteRequest struct {
 	Text string `json:"text" validate:"required,max=2000"`
+}
+
+type Package struct {
+	ID             int      `json:"id"`
+	Name           string   `json:"name"`
+	Description    string   `json:"description"`
+	Price          float64  `json:"price"`
+	Skills         []string `json:"skills"`
+	DurationMonths int      `json:"duration_months"`
+	Currency       string   `json:"currency"`
+	IsActive       bool     `json:"is_active"`
 }
 
 type Booking struct {
@@ -215,30 +204,4 @@ const SessionCapacity = 6
 // (remote interns don't).
 func UsesSeat(workMode string) bool {
 	return workMode == "onsite" || workMode == "hybrid"
-}
-
-// displayNames maps department and specialization ids to the names people see
-// (kept in sync with the frontend DEPARTMENTS config).
-var displayNames = map[string]string{
-	"software":      "Software Development",
-	"iot":           "Internet of Things",
-	"frontend":      "Frontend Development",
-	"backend":       "Backend Development",
-	"fullstack":     "Full-Stack Development",
-	"mobile":        "Mobile Development",
-	"database":      "Database Development",
-	"embedded":      "Embedded Systems",
-	"arduino-esp32": "Arduino and ESP32",
-	"sensors":       "Sensors and Electronics",
-	"iot-apps":      "IoT Application Development",
-	"smart-systems": "Smart Systems",
-}
-
-// DisplayName returns the human-readable name for a department or
-// specialization id, falling back to the id itself when it is unknown.
-func DisplayName(id string) string {
-	if name, ok := displayNames[id]; ok {
-		return name
-	}
-	return id
 }

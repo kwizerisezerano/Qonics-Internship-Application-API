@@ -1,0 +1,418 @@
+openapi: 3.0.3
+info:
+  title: Qonics Internship Application API - Package Service
+  description: Package management endpoints for training programs. Public endpoints for listing/retrieving packages. Admin endpoints (protected) for creating, updating, and deleting packages. All endpoints are exposed through the KrakenD gateway.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+    description: KrakenD gateway
+tags:
+  - name: Packages
+    description: Package management for training programs
+paths:
+  /packages:
+    get:
+      tags:
+        - Packages
+      summary: List all packages
+      description: Returns a paginated list of all active packages (public endpoint, no authentication required)
+      operationId: listPackages
+      parameters:
+        - name: page
+          in: query
+          description: Page number for pagination
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          description: Number of items per page
+          schema:
+            type: integer
+            default: 10
+      responses:
+        '200':
+          description: Packages retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackagesEnvelope'
+              example:
+                status: 200
+                message: Packages retrieved
+                data:
+                  - id: 1
+                    name: Basic Training Package
+                    description: Coding and Design (Figma)
+                    price: 150000
+                    skills: Coding, Design (Figma)
+                    duration_months: 3
+                    currency: RWF
+                    is_active: true
+                  - id: 2
+                    name: Standard Training Package
+                    description: Coding, Design (Figma), 3D Printing, and CNC
+                    price: 250000
+                    skills: Coding, Design (Figma), 3D Printing, CNC
+                    duration_months: 6
+                    currency: RWF
+                    is_active: true
+                pagination:
+                  total: 2
+                  page: 1
+                  limit: 10
+                  total_pages: 1
+        '500':
+          description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    post:
+      tags:
+        - Packages
+      summary: Create a new package
+      description: Creates a new training package (admin only, requires JWT authentication)
+      operationId: createPackage
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PackageRequest'
+            example:
+              name: Basic Training Package
+              description: Coding and Design (Figma)
+              price: 150000
+              skills: Coding, Design (Figma)
+              duration_months: 3
+              currency: RWF
+      responses:
+        '200':
+          description: Package created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackageEnvelope'
+              example:
+                status: 200
+                message: Package created
+                data:
+                  id: 1
+                  name: Basic Training Package
+                  description: Coding and Design (Figma)
+                  price: 150000
+                  skills: Coding, Design (Figma)
+                  duration_months: 3
+                  currency: RWF
+                  is_active: true
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Failed to save package
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /packages/{id}:
+    get:
+      tags:
+        - Packages
+      summary: Get a package by ID
+      description: Returns a single package by ID (public endpoint, no authentication required)
+      operationId: getPackage
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Package ID
+          schema:
+            type: integer
+          example: 1
+      responses:
+        '200':
+          description: Package retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackageEnvelope'
+              example:
+                status: 200
+                message: Package retrieved
+                data:
+                  id: 1
+                  name: Basic Training Package
+                  description: Coding and Design (Figma)
+                  price: 150000
+                  skills: Coding, Design (Figma)
+                  duration_months: 3
+                  currency: RWF
+                  is_active: true
+        '400':
+          description: Invalid package id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Package not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    put:
+      tags:
+        - Packages
+      summary: Update a package
+      description: Updates an existing package by ID (admin only, requires JWT authentication)
+      operationId: updatePackage
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Package ID
+          schema:
+            type: integer
+          example: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PackageRequest'
+            example:
+              name: Updated Package Name
+              description: Updated description
+              price: 200000
+              skills: Updated skills
+              duration_months: 4
+              currency: RWF
+      responses:
+        '200':
+          description: Package updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackageEnvelope'
+              example:
+                status: 200
+                message: Package updated
+                data:
+                  id: 1
+                  name: Updated Package Name
+                  description: Updated description
+                  price: 200000
+                  skills: Updated skills
+                  duration_months: 4
+                  currency: RWF
+                  is_active: true
+        '400':
+          description: Invalid package id or request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Package not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Failed to update package
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    delete:
+      tags:
+        - Packages
+      summary: Delete a package
+      description: Deletes a package by ID (admin only, requires JWT authentication)
+      operationId: deletePackage
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Package ID
+          schema:
+            type: integer
+          example: 1
+      responses:
+        '200':
+          description: Package deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+              example:
+                status: 200
+                message: Package deleted
+                data: null
+        '400':
+          description: Invalid package id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Package not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Failed to delete package
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Package:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Package ID
+        name:
+          type: string
+          description: Package name
+        description:
+          type: string
+          description: Package description
+        price:
+          type: integer
+          description: Package price in the specified currency
+        skills:
+          type: string
+          description: Comma-separated list of skills included
+        duration_months:
+          type: integer
+          description: Duration of the training program in months
+        currency:
+          type: string
+          description: Currency code (e.g., RWF, USD)
+          default: RWF
+        is_active:
+          type: boolean
+          description: Whether the package is active
+    PackageRequest:
+      type: object
+      required:
+        - name
+        - description
+        - price
+        - skills
+        - duration_months
+      properties:
+        name:
+          type: string
+          example: Basic Training Package
+        description:
+          type: string
+          example: Coding and Design (Figma)
+        price:
+          type: integer
+          example: 150000
+        skills:
+          type: string
+          example: Coding, Design (Figma)
+        duration_months:
+          type: integer
+          example: 3
+        currency:
+          type: string
+          example: RWF
+          default: RWF
+    PackageEnvelope:
+      type: object
+      properties:
+        status:
+          type: integer
+          example: 200
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/Package'
+    PackagesEnvelope:
+      type: object
+      properties:
+        status:
+          type: integer
+          example: 200
+        message:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Package'
+        pagination:
+          type: object
+          properties:
+            total:
+              type: integer
+            page:
+              type: integer
+            limit:
+              type: integer
+            total_pages:
+              type: integer
+    SuccessEnvelope:
+      type: object
+      properties:
+        status:
+          type: integer
+          example: 200
+        message:
+          type: string
+        data:
+          nullable: true
+    ErrorEnvelope:
+      type: object
+      properties:
+        status:
+          type: integer
+          example: 400
+        message:
+          type: string
+          example: Invalid request

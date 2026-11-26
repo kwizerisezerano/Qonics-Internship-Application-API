@@ -519,7 +519,7 @@
       ]
     },
     {
-      "endpoint": "/prices",
+      "endpoint": "/packages",
       "method": "GET",
       "output_encoding": "no-op",
       "input_headers": [
@@ -527,15 +527,12 @@
       ],
       "input_query_strings": [
         "page",
-        "limit",
-        "department",
-        "specialization",
-        "duration_months"
+        "limit"
       ],
       "backend": [
         {
           "host": ["http://applicant:9000"],
-          "url_pattern": "/api/v1/prices",
+          "url_pattern": "/api/v1/packages",
           "encoding": "no-op",
           "sd": "static",
           "disable_host_sanitize": true,
@@ -549,8 +546,31 @@
       ]
     },
     {
-      "endpoint": "/prices",
-      "method": "PUT",
+      "endpoint": "/packages/{id}",
+      "method": "GET",
+      "output_encoding": "no-op",
+      "input_headers": [
+        "Accept"
+      ],
+      "backend": [
+        {
+          "host": ["http://applicant:9000"],
+          "url_pattern": "/api/v1/packages/{id}",
+          "encoding": "no-op",
+          "sd": "static",
+          "disable_host_sanitize": true,
+          "extra_config": {
+            "backend/http": {
+              "return_error_details": "backend_alias",
+              "status": [200, 404, 500]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "endpoint": "/packages",
+      "method": "POST",
       "output_encoding": "no-op",
       "input_headers": [
         "Content-Type",
@@ -561,7 +581,7 @@
       "backend": [
         {
           "host": ["http://applicant:9000"],
-          "url_pattern": "/api/v1/prices",
+          "url_pattern": "/api/v1/packages",
           "encoding": "no-op",
           "disable_host_sanitize": true,
           "extra_config": {
@@ -574,34 +594,32 @@
       ]
     },
     {
-      "endpoint": "/prices/quote",
-      "method": "GET",
+      "endpoint": "/packages/{id}",
+      "method": "PUT",
       "output_encoding": "no-op",
       "input_headers": [
-        "Accept"
-      ],
-      "input_query_strings": [
-        "specialization",
-        "duration_months"
+        "Content-Type",
+        "Accept",
+        "Authorization",
+        "authorization"
       ],
       "backend": [
         {
           "host": ["http://applicant:9000"],
-          "url_pattern": "/api/v1/prices/quote",
+          "url_pattern": "/api/v1/packages/{id}",
           "encoding": "no-op",
-          "sd": "static",
           "disable_host_sanitize": true,
           "extra_config": {
             "backend/http": {
               "return_error_details": "backend_alias",
-              "status": [200, 400, 500]
+              "status": [200, 201, 400, 401, 403, 404, 406, 409, 429, 500]
             }
           }
         }
       ]
     },
     {
-      "endpoint": "/prices/{id}",
+      "endpoint": "/packages/{id}",
       "method": "DELETE",
       "output_encoding": "no-op",
       "input_headers": [
@@ -613,7 +631,7 @@
       "backend": [
         {
           "host": ["http://applicant:9000"],
-          "url_pattern": "/api/v1/prices/{id}",
+          "url_pattern": "/api/v1/packages/{id}",
           "encoding": "no-op",
           "disable_host_sanitize": true,
           "extra_config": {
@@ -640,7 +658,7 @@
         "limit",
         "search",
         "reference",
-        "department",
+        "package_id",
         "status",
         "submitted_from",
         "submitted_to"
@@ -675,7 +693,7 @@
         "limit",
         "search",
         "reference",
-        "department",
+        "package_id",
         "status",
         "submitted_from",
         "submitted_to"

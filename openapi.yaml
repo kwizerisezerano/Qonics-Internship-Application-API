@@ -47,7 +47,7 @@ components:
       description: >-
         Cross-column search. Plain columns match case-insensitively (contains);
         encrypted PII columns (name/email) match on the SHA-256 hash, so those
-        require the exact value.
+        require the exact value. Searches reference and package_name.
       schema:
         type: string
 
@@ -133,10 +133,25 @@ components:
           type: string
         reference:
           type: string
+        package_id:
+          type: integer
+          nullable: true
+        package_name:
+          type: string
+          nullable: true
         department:
           type: string
+          nullable: true
+          description: Kept for historical records
         specialization:
           type: string
+          nullable: true
+          description: Kept for historical records
+        skills:
+          type: array
+          items:
+            type: string
+          nullable: true
         motivation:
           type: string
         experience:
@@ -155,7 +170,7 @@ components:
         amount:
           type: number
           nullable: true
-          description: Calculated by the backend from the course and period price (default 200000 x duration_months); a client-sent amount is ignored.
+          description: Calculated by the backend from the package price; a client-sent amount is ignored.
         status:
           type: string
           enum: [submitted, under_review, shortlisted, interview, accepted, rejected]
@@ -175,32 +190,39 @@ components:
           items:
             $ref: '#/components/schemas/ApplicationNote'
 
-    Price:
+    Package:
       type: object
-      required: [department, specialization, duration_months, price]
+      required: [name, price, skills, duration_months]
       properties:
         id:
           type: integer
           readOnly: true
-        department:
+        name:
           type: string
-          enum: [software, iot]
-        specialization:
+          example: Package 1
+        description:
           type: string
-          example: backend
-        duration_months:
-          type: integer
-          minimum: 1
-          maximum: 12
-          example: 3
+          example: Coding & Design (Figma)
         price:
           type: number
           minimum: 0
-          description: Total price for the period.
-          example: 450000
+          description: Total price for the package.
+          example: 150000
+        skills:
+          type: array
+          items:
+            type: string
+          example: ["coding", "design"]
+        duration_months:
+          type: integer
+          minimum: 1
+          example: 3
         currency:
           type: string
           example: RWF
+        is_active:
+          type: boolean
+          readOnly: true
 
     ApplicationHistory:
       type: object
@@ -669,11 +691,11 @@ paths:
           required: false
           schema:
             type: string
-        - name: department
+        - name: package_id
           in: query
           required: false
           schema:
-            type: string
+            type: integer
         - name: status
           in: query
           required: false
@@ -750,11 +772,11 @@ paths:
           required: false
           schema:
             type: string
-        - name: department
+        - name: package_id
           in: query
           required: false
           schema:
-            type: string
+            type: integer
         - name: status
           in: query
           required: false
@@ -818,15 +840,15 @@ paths:
                               type: string
                             count:
                               type: integer
-                      by_specialization:
+                      by_package:
                         type: array
-                        description: Application counts per department and specialization.
+                        description: Application counts per package.
                         items:
                           type: object
                           properties:
-                            department:
-                              type: string
-                            specialization:
+                            package_id:
+                              type: integer
+                            package_name:
                               type: string
                             count:
                               type: integer
@@ -846,13 +868,14 @@ paths:
         - Applications
       summary: Create application
       description: |
-        Create a new application. Open to guests: without a bearer token the body
+        Create a new application by selecting a package. Open to guests: without a bearer token the body
         must also carry `full_name`, `email` and `phone`; the account is created
         immediately and an email with a link to set a password is sent so the
         applicant can open the portal later. If the email already has an account
         the call answers 409 and asks them to log in. Logged-in applicants apply
         under their own account as before.
 
+        The package_id determines the price, duration, and skills included in the training.
         Guests can attach documents: upload each file first with
         `POST /files/guest/presigned-url` (no token needed; the first response
         returns a `guest_token`, send it back with later uploads, max 5 files),
@@ -1202,25 +1225,21 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
-  /prices:
+  /packages:
     get:
       tags:
         - Public
-      summary: List prices by course and period
+      summary: List packages
       description: >-
-        Admin-set prices (no login). Paginated; filter with department,
-        specialization and duration_months. A course and period with no row uses
-        the default of 200000 RWF per month (see /prices/quote).
+        Available training packages (no login). Paginated. Each package includes
+        pricing, skills, and duration.
       security: []
       parameters:
         - {name: page, in: query, schema: {type: integer, default: 1}}
         - {name: limit, in: query, schema: {type: integer, default: 10, maximum: 100}}
-        - {name: department, in: query, schema: {type: string, enum: [software, iot]}}
-        - {name: specialization, in: query, schema: {type: string}}
-        - {name: duration_months, in: query, schema: {type: integer}}
       responses:
         '200':
-          description: Prices retrieved
+          description: Packages retrieved
           content:
             application/json:
               schema:
@@ -1229,14 +1248,13 @@ paths:
                   data:
                     type: array
                     items:
-                      $ref: '#/components/schemas/Price'
-    put:
+                      $ref: '#/components/schemas/Package'
+    post:
       tags:
         - Settings
-      summary: Set the price of a course for a period (admin)
+      summary: Create a package (admin)
       description: >-
-        Admin only. Creates the price, or replaces it when that specialization
-        and duration_months already have one. price is the total for the period.
+        Admin only. Creates a new training package.
       security:
         - bearerAuth: []
       requestBody:
@@ -1244,63 +1262,79 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/Price'
+              $ref: '#/components/schemas/Package'
       responses:
         '200':
-          description: Price saved
+          description: Package created
         '400':
-          description: Validation error (e.g. specialization not in the department)
+          description: Validation error
         '401':
           description: Missing or invalid token
         '403':
           description: Not an admin
 
-  /prices/quote:
+  /packages/{id}:
     get:
       tags:
         - Public
-      summary: Price for a course and period
-      description: >-
-        The admin-set price, or 200000 x duration_months when none is set
-        (is_default is true then). The application amount is calculated the same way.
+      summary: Get package by ID
+      description: Get a single package by ID (no login required)
       security: []
       parameters:
-        - {name: specialization, in: query, required: true, schema: {type: string, example: backend}}
-        - {name: duration_months, in: query, required: true, schema: {type: integer, example: 3}}
+        - {name: id, in: path, required: true, schema: {type: integer}}
       responses:
         '200':
-          description: Price retrieved
+          description: Package retrieved
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   data:
-                    type: object
-                    properties:
-                      specialization: {type: string}
-                      duration_months: {type: integer}
-                      price: {type: number, example: 600000}
-                      currency: {type: string, example: RWF}
-                      is_default: {type: boolean}
+                    $ref: '#/components/schemas/Package'
+        '404':
+          description: Package not found
+    put:
+      tags:
+        - Settings
+      summary: Update a package (admin)
+      description: >-
+        Admin only. Updates an existing package by ID.
+      security:
+        - bearerAuth: []
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: integer}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Package'
+      responses:
+        '200':
+          description: Package updated
         '400':
-          description: Missing or invalid specialization or duration_months
-
-  /prices/{id}:
+          description: Validation error
+        '401':
+          description: Missing or invalid token
+        '403':
+          description: Not an admin
+        '404':
+          description: Package not found
     delete:
       tags:
         - Settings
-      summary: Remove a price (admin)
-      description: That course and period then use the default price.
+      summary: Delete a package (admin)
+      description: Remove a package by ID
       security:
         - bearerAuth: []
       parameters:
         - {name: id, in: path, required: true, schema: {type: integer}}
       responses:
         '200':
-          description: Price deleted
+          description: Package deleted
         '404':
-          description: Price not found
+          description: Package not found
 
   /settings/public:
     get:

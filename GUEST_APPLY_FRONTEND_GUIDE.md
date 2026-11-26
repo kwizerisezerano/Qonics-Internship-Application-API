@@ -313,16 +313,17 @@ curl -X POST 'BASE/auth/forgot-password' \
 
 Interactive API docs for `POST /applications` are in `openapi.yaml`.
 
-## 10. Prices by course and period
+## 10. Packages
 
-Prices belong to a course (specialization) and a period (`duration_months`). The price is the total for that period. A combination an admin has not priced costs 200000 RWF x months.
+Applicants select a training package which includes pricing, skills, and duration. Each package has a fixed price.
 
-- `GET /prices/quote?specialization=backend&duration_months=3` (public): `{"price":600000,"currency":"RWF","is_default":true}`. Use it to show the price on the form.
-- `GET /prices?page=1&limit=10&department=software` (public): the admin-set prices, paginated.
-- `PUT /prices` (admin): `{"department":"software","specialization":"backend","duration_months":3,"price":450000,"currency":"RWF"}`. Sending the same course and period again replaces the price.
-- `DELETE /prices/{id}` (admin): that course and period go back to the default.
+- `GET /packages` (public): list all available packages with their pricing and skills.
+- `GET /packages/:id` (public): get details of a specific package.
+- `POST /packages` (admin): create a new package.
+- `PUT /packages/:id` (admin): update an existing package.
+- `DELETE /packages/:id` (admin): delete a package.
 
-`POST /applications` does not take an amount. The backend calculates it from the same price and returns it as `amount`.
+The application payload must include `package_id`. The backend calculates the amount from the package price and returns it as `amount`.
 
 Suggested text for the on-site morning session:
 "On-site, morning session (09:00 - 11:00): this is a paid session. The fee includes a coffee break."

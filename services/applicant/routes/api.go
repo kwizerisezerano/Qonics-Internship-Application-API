@@ -37,11 +37,12 @@ func SetupRoutes(app *fiber.App, applicantController *controller.ApplicantContro
 	// answers before that group's auth/admin middleware is reached.
 	api.Get("/settings/public", applicantController.GetPublicSettings)
 
-	// Prices: public read, admin write. Public route registered first (see above).
-	api.Get("/prices", applicantController.ListPrices)
-	api.Get("/prices/quote", applicantController.GetPriceQuote)
-	api.Put("/prices", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.SavePrice)
-	api.Delete("/prices/:id", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.DeletePrice)
+	// Packages: public read, admin write. Public route registered first (see above).
+	api.Get("/packages", applicantController.ListPackages)
+	api.Get("/packages/:id", applicantController.GetPackage)
+	api.Post("/packages", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.SavePackage)
+	api.Put("/packages/:id", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.UpdatePackage)
+	api.Delete("/packages/:id", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.DeletePackage)
 
 	// Settings routes (admin)
 	settings := api.Group("/settings")

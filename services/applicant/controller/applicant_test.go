@@ -97,10 +97,11 @@ func init() {
 	// Same order as routes/api.go: the public route is registered before the
 	// admin-only settings group so its middleware never runs for it.
 	applicantTestApp.Get("/api/v1/settings/public", controller.GetPublicSettings)
-	applicantTestApp.Get("/api/v1/prices", controller.ListPrices)
-	applicantTestApp.Get("/api/v1/prices/quote", controller.GetPriceQuote)
-	applicantTestApp.Put("/api/v1/prices", auth, middleware.AdminMiddleware(), controller.SavePrice)
-	applicantTestApp.Delete("/api/v1/prices/:id", auth, middleware.AdminMiddleware(), controller.DeletePrice)
+	applicantTestApp.Get("/api/v1/packages", controller.ListPackages)
+	applicantTestApp.Get("/api/v1/packages/:id", controller.GetPackage)
+	applicantTestApp.Post("/api/v1/packages", auth, middleware.AdminMiddleware(), controller.SavePackage)
+	applicantTestApp.Put("/api/v1/packages/:id", auth, middleware.AdminMiddleware(), controller.UpdatePackage)
+	applicantTestApp.Delete("/api/v1/packages/:id", auth, middleware.AdminMiddleware(), controller.DeletePackage)
 
 	settings := applicantTestApp.Group("/api/v1/settings", auth, middleware.AdminMiddleware())
 	settings.Get("/", controller.GetSettings)
@@ -836,8 +837,9 @@ func TestUnauthorizedAccess(t *testing.T) {
 		{"GET", "/api/v1/activity-logs/"},
 		{"GET", "/api/v1/settings/"},
 		{"PUT", "/api/v1/settings/"},
-		{"PUT", "/api/v1/prices"},
-		{"DELETE", "/api/v1/prices/1"},
+		{"POST", "/api/v1/packages"},
+		{"PUT", "/api/v1/packages/1"},
+		{"DELETE", "/api/v1/packages/1"},
 	}
 
 	for _, ep := range endpoints {
@@ -1005,89 +1007,78 @@ func TestGetPublicSettingsRoute(t *testing.T) {
 	}
 }
 
-// TestPricesRoutes covers prices by course and period (public read, admin write).
-func TestPricesRoutes(t *testing.T) {
+// TestPackagesRoutes covers packages (public read, admin write).
+func TestPackagesRoutes(t *testing.T) {
 	admin := authHeaders(1, "admin")
-	_, err := applicantTestDB.Exec(context.Background(), `DELETE FROM prices`)
+	_, err := applicantTestDB.Exec(context.Background(), `DELETE FROM packages`)
 	require.NoError(t, err)
 
-	price := func(v any) map[string]any {
-		return map[string]any{"department": "software", "specialization": "backend", "duration_months": 3, "price": v}
+	pkg := func(name string, price any) map[string]any {
+		return map[string]any{
+			"name":            name,
+			"description":     "Test package",
+			"price":           price,
+			"skills":          []string{"coding", "design"},
+			"duration_months": 3,
+		}
 	}
-	const quote = "/api/v1/prices/quote?specialization=backend&duration_months=3"
 
-	t.Run("unset course and period uses the default", func(t *testing.T) {
-		status, body := doJSON(t, "GET", quote, nil, nil)
+	t.Run("public can list packages", func(t *testing.T) {
+		status, body := doJSON(t, "GET", "/api/v1/packages", nil, nil)
 		require.Equal(t, fiber.StatusOK, status)
-		data, _ := body["data"].(map[string]any)
-		assert.Equal(t, 600000.0, data["price"])
-		assert.Equal(t, true, data["is_default"])
+		data, _ := body["data"].([]any)
+		assert.Empty(t, data)
 	})
 
-	t.Run("quote needs a valid course and period", func(t *testing.T) {
-		status, _ := doJSON(t, "GET", "/api/v1/prices/quote?specialization=nope&duration_months=3", nil, nil)
-		assert.Equal(t, fiber.StatusBadRequest, status)
-	})
-
-	t.Run("no token is unauthorized", func(t *testing.T) {
-		status, _ := doJSON(t, "PUT", "/api/v1/prices", price(1), nil)
+	t.Run("no token is unauthorized for create", func(t *testing.T) {
+		status, _ := doJSON(t, "POST", "/api/v1/packages", pkg("Test", 100000), nil)
 		assert.Equal(t, fiber.StatusUnauthorized, status)
 	})
 
-	t.Run("applicant is forbidden", func(t *testing.T) {
-		status, _ := doJSON(t, "PUT", "/api/v1/prices", price(1), authHeaders(1, "applicant"))
+	t.Run("applicant is forbidden for create", func(t *testing.T) {
+		status, _ := doJSON(t, "POST", "/api/v1/packages", pkg("Test", 100000), authHeaders(1, "applicant"))
 		assert.Equal(t, fiber.StatusForbidden, status)
 	})
 
 	t.Run("negative or missing price is rejected", func(t *testing.T) {
-		status, _ := doJSON(t, "PUT", "/api/v1/prices", price(-1), admin)
-		assert.Equal(t, fiber.StatusBadRequest, status)
-		status, _ = doJSON(t, "PUT", "/api/v1/prices", price(nil), admin)
-		assert.Equal(t, fiber.StatusBadRequest, status)
-	})
-
-	t.Run("specialization must belong to the department", func(t *testing.T) {
-		p := price(1000)
-		p["department"] = "iot"
-		status, _ := doJSON(t, "PUT", "/api/v1/prices", p, admin)
+		status, _ := doJSON(t, "POST", "/api/v1/packages", pkg("Test", -1), admin)
 		assert.Equal(t, fiber.StatusBadRequest, status)
 	})
 
 	var id float64
-	t.Run("admin sets a price and the public reads it", func(t *testing.T) {
-		status, body := doJSON(t, "PUT", "/api/v1/prices", price(450000), admin)
+	t.Run("admin creates a package", func(t *testing.T) {
+		status, body := doJSON(t, "POST", "/api/v1/packages", pkg("Test Package", 150000), admin)
 		require.Equal(t, fiber.StatusOK, status)
 		data, _ := body["data"].(map[string]any)
 		id, _ = data["id"].(float64)
-
-		status, body = doJSON(t, "GET", quote, nil, nil)
-		require.Equal(t, fiber.StatusOK, status)
-		data, _ = body["data"].(map[string]any)
-		assert.Equal(t, 450000.0, data["price"])
-		assert.Equal(t, false, data["is_default"])
-
-		status, body = doJSON(t, "GET", "/api/v1/prices?specialization=backend", nil, nil)
-		require.Equal(t, fiber.StatusOK, status)
-		list, _ := body["data"].([]any)
-		assert.Len(t, list, 1)
+		assert.Equal(t, "Test Package", data["name"])
+		assert.Equal(t, 150000.0, data["price"])
 	})
 
-	t.Run("the same course and period is replaced, not duplicated", func(t *testing.T) {
-		status, _ := doJSON(t, "PUT", "/api/v1/prices", price(500000), admin)
+	t.Run("public can get package by ID", func(t *testing.T) {
+		path := fmt.Sprintf("/api/v1/packages/%d", int(id))
+		status, body := doJSON(t, "GET", path, nil, nil)
 		require.Equal(t, fiber.StatusOK, status)
-		var count int
-		require.NoError(t, applicantTestDB.QueryRow(context.Background(), `SELECT COUNT(id) FROM prices`).Scan(&count))
-		assert.Equal(t, 1, count)
+		data, _ := body["data"].(map[string]any)
+		assert.Equal(t, "Test Package", data["name"])
 	})
 
-	t.Run("delete falls back to the default", func(t *testing.T) {
-		path := fmt.Sprintf("/api/v1/prices/%d", int(id))
+	t.Run("admin can update package", func(t *testing.T) {
+		path := fmt.Sprintf("/api/v1/packages/%d", int(id))
+		updated := pkg("Updated Package", 200000)
+		status, body := doJSON(t, "PUT", path, updated, admin)
+		require.Equal(t, fiber.StatusOK, status)
+		data, _ := body["data"].(map[string]any)
+		assert.Equal(t, "Updated Package", data["name"])
+		assert.Equal(t, 200000.0, data["price"])
+	})
+
+	t.Run("admin can delete package", func(t *testing.T) {
+		path := fmt.Sprintf("/api/v1/packages/%d", int(id))
 		status, _ := doJSON(t, "DELETE", path, nil, admin)
 		require.Equal(t, fiber.StatusOK, status)
-		status, _ = doJSON(t, "DELETE", path, nil, admin)
+
+		status, _ = doJSON(t, "GET", path, nil, nil)
 		assert.Equal(t, fiber.StatusNotFound, status)
-		_, body := doJSON(t, "GET", quote, nil, nil)
-		data, _ := body["data"].(map[string]any)
-		assert.Equal(t, 600000.0, data["price"])
 	})
 }

@@ -131,22 +131,14 @@ type ActivityLogFilter struct {
 	Search string `query:"search"`
 }
 
-// Price is one admin-set price: a course (specialization) for a period
-// (duration_months). Price is the total for that period.
-type Price struct {
+// Package is a training package with pricing, skills, and duration.
+type Package struct {
 	ID             int      `json:"id"`
-	Department     string   `json:"department" validate:"required,oneof=software iot"`
-	Specialization string   `json:"specialization" validate:"required"`
+	Name           string   `json:"name" validate:"required"`
+	Description    string   `json:"description"`
+	Price          float64  `json:"price" validate:"required,gte=0,lte=100000000"`
+	Skills         []string `json:"skills" validate:"required"`
 	DurationMonths int      `json:"duration_months" validate:"required,min=1,max=12"`
-	Price          *float64 `json:"price" validate:"required,gte=0,lte=100000000"`
 	Currency       string   `json:"currency" validate:"omitempty,len=3,uppercase"`
-}
-
-// PriceQuote is the price a course and period resolve to, set or default.
-type PriceQuote struct {
-	Specialization string  `json:"specialization"`
-	DurationMonths int     `json:"duration_months"`
-	Price          float64 `json:"price"`
-	Currency       string  `json:"currency"`
-	IsDefault      bool    `json:"is_default"`
+	IsActive       bool     `json:"is_active"`
 }
