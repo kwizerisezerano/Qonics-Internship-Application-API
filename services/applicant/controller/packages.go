@@ -89,8 +89,23 @@ func (ac *ApplicantController) SavePackage(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Price cannot be negative")
 	}
 
+	ctx := context.Background()
+
+	// Check for duplicate package name (prevent duplicates)
+	var existingID int
+	err := ac.DB.QueryRow(ctx, `
+		SELECT id FROM packages
+		WHERE LOWER(name) = LOWER($1) AND deleted_at IS NULL
+	`, req.Name).Scan(&existingID)
+	if err == nil {
+		return utils.JsonErrorResponse(c, fiber.StatusConflict, "Package with this name already exists")
+	}
+	if err != pgx.ErrNoRows {
+		return ac.packagesDBError(c, "Failed to check for duplicates", err)
+	}
+
 	userID := utils.CurrentUserID(c)
-	err := ac.DB.QueryRow(context.Background(), `
+	err = ac.DB.QueryRow(ctx, `
 		INSERT INTO packages (name, description, price, skills, period, currency, updated_by)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id

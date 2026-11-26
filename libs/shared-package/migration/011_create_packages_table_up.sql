@@ -22,6 +22,9 @@ FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 -- Index for faster filtering of non-deleted packages (leazi pattern)
 CREATE INDEX IF NOT EXISTS idx_packages_deleted_at ON packages(deleted_at);
 
+-- Unique index on lowercase name to prevent duplicates (case-insensitive)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_packages_name_unique ON packages (LOWER(name)) WHERE deleted_at IS NULL;
+
 -- Add package_id to applications table
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS package_id INTEGER REFERENCES packages(id) ON DELETE SET NULL;
 

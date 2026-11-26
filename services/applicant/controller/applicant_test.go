@@ -1098,6 +1098,12 @@ func TestPackagesRoutes(t *testing.T) {
 		assert.Equal(t, 200000.0, data["price"])
 	})
 
+	t.Run("duplicate package name is rejected", func(t *testing.T) {
+		// Try to create a package with the same name as an existing active package
+		status, _ := doJSON(t, "POST", "/api/v1/packages", pkg("Updated Package", 175000), admin)
+		assert.Equal(t, fiber.StatusConflict, status, "duplicate package name should be rejected")
+	})
+
 	var deleteID float64
 	t.Run("admin creates package for delete test", func(t *testing.T) {
 		status, body := doJSON(t, "POST", "/api/v1/packages", pkg("Delete Test Package", 175000), admin)
