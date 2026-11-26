@@ -92,6 +92,7 @@ recreate_postgres_test:
 		-e POSTGRES_USER=postgres \
 		-e POSTGRES_PASSWORD=postgres \
 		-e POSTGRES_DB=qonics_test_db \
+		--restart unless-stopped \
 		-p 5434:5432 \
 		-d postgres:17-alpine
 	@echo "Waiting for PostgreSQL test container to be ready..."
@@ -106,6 +107,10 @@ recreate_postgres_test:
 	done
 	@echo "PostgreSQL test container recreated!"
 
+## redis: Start Redis (needed by the auth, applicant and application tests)
+redis:
+	docker compose up -d --wait redis
+
 ## test_db: Run migrations on test database
 test_db: recreate_postgres_test
 	@echo "Running migrations on test database..."
@@ -117,7 +122,7 @@ test_db: recreate_postgres_test
 	@echo "Test database migrations completed!"
 
 ## test: Run all service tests against test database
-test: test_db
+test: test_db redis
 	@echo "Running all service tests..."
 	cd ./libs/shared-package && go test -v ./...
 	cd ./services/auth && go test -v ./...
