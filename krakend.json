@@ -572,7 +572,7 @@
       ]
     },
     {
-      "endpoint": "/packages",
+      "endpoint": "/packages/{id}",
       "method": "PUT",
       "output_encoding": "no-op",
       "input_headers": [
@@ -581,13 +581,10 @@
         "Authorization",
         "authorization"
       ],
-      "input_query_strings": [
-        "id"
-      ],
       "backend": [
         {
           "host": ["http://applicant:9000"],
-          "url_pattern": "/api/v1/packages",
+          "url_pattern": "/api/v1/packages/{id}",
           "encoding": "no-op",
           "disable_host_sanitize": true,
           "extra_config": {
@@ -600,7 +597,7 @@
       ]
     },
     {
-      "endpoint": "/packages",
+      "endpoint": "/packages/{id}",
       "method": "DELETE",
       "output_encoding": "no-op",
       "input_headers": [
@@ -609,13 +606,10 @@
         "Authorization",
         "authorization"
       ],
-      "input_query_strings": [
-        "id"
-      ],
       "backend": [
         {
           "host": ["http://applicant:9000"],
-          "url_pattern": "/api/v1/packages",
+          "url_pattern": "/api/v1/packages/{id}",
           "encoding": "no-op",
           "disable_host_sanitize": true,
           "extra_config": {

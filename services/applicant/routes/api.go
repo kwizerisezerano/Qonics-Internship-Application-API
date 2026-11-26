@@ -41,8 +41,8 @@ func SetupRoutes(app *fiber.App, applicantController *controller.ApplicantContro
 	// GET /packages - list all packages (no ?id=) or get single package (?id=)
 	api.Get("/packages", applicantController.ListPackages)
 	api.Post("/packages", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.SavePackage)
-	api.Put("/packages", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.UpdatePackage)           // Uses ?id= query param
-	api.Delete("/packages", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.DeletePackage)        // Uses ?id= query param
+	api.Put("/packages/:id", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.UpdatePackage)
+	api.Delete("/packages/:id", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.DeletePackage)
 	api.Post("/packages/restore", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.RestorePackage) // Uses undo_token in body
 
 	// Settings routes (admin)

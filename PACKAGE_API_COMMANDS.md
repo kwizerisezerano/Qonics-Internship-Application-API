@@ -69,7 +69,7 @@ curl -X GET "http://localhost:8080/packages?id=1"
 
 ### Update Package (Admin)
 ```bash
-curl -X PUT "http://localhost:8080/packages?id=1" \
+curl -X PUT "http://localhost:8080/packages/1" \
   -H "Authorization: Bearer YOUR_JWT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -85,7 +85,7 @@ curl -X PUT "http://localhost:8080/packages?id=1" \
 
 ### Delete Package (Admin - Returns Undo Token)
 ```bash
-curl -X DELETE "http://localhost:8080/packages?id=1" \
+curl -X DELETE "http://localhost:8080/packages/1" \
   -H "Authorization: Bearer YOUR_JWT_TOKEN"
 ```
 Response includes an `undo_token` for restoration:
@@ -108,7 +108,8 @@ curl -X POST "http://localhost:8080/packages/restore" \
 ```
 
 ## Notes
-- Package IDs are passed as query parameters (`?id=1`), not path parameters
+- Package IDs for GET single package use query parameter (`?id=1`)
+- Package IDs for PUT and DELETE use path parameter (`/packages/1`)
 - `skills` is an array of strings, not a comma-separated string
 - `period` indicates billing frequency (monthly/yearly/quarterly), not duration
 - Duration is tracked on the application table, not the package table

@@ -141,8 +141,8 @@ func init() {
 	applicantTestApp.Get("/api/v1/settings/public", controller.GetPublicSettings)
 	applicantTestApp.Get("/api/v1/packages", controller.ListPackages)
 	applicantTestApp.Post("/api/v1/packages", auth, middleware.AdminMiddleware(), controller.SavePackage)
-	applicantTestApp.Put("/api/v1/packages", auth, middleware.AdminMiddleware(), controller.UpdatePackage)
-	applicantTestApp.Delete("/api/v1/packages", auth, middleware.AdminMiddleware(), controller.DeletePackage)
+	applicantTestApp.Put("/api/v1/packages/:id", auth, middleware.AdminMiddleware(), controller.UpdatePackage)
+	applicantTestApp.Delete("/api/v1/packages/:id", auth, middleware.AdminMiddleware(), controller.DeletePackage)
 	applicantTestApp.Post("/api/v1/packages/restore", auth, middleware.AdminMiddleware(), controller.RestorePackage)
 
 	settings := applicantTestApp.Group("/api/v1/settings", auth, middleware.AdminMiddleware())
@@ -880,8 +880,8 @@ func TestUnauthorizedAccess(t *testing.T) {
 		{"GET", "/api/v1/settings/"},
 		{"PUT", "/api/v1/settings/"},
 		{"POST", "/api/v1/packages"},
-		{"PUT", "/api/v1/packages?id=1"},
-		{"DELETE", "/api/v1/packages?id=1"},
+		{"PUT", "/api/v1/packages/1"},
+		{"DELETE", "/api/v1/packages/1"},
 		{"POST", "/api/v1/packages/restore"},
 	}
 
@@ -1107,7 +1107,7 @@ func TestPackagesRoutes(t *testing.T) {
 	})
 
 	t.Run("admin can update package", func(t *testing.T) {
-		path := fmt.Sprintf("/api/v1/packages?id=%d", int(id))
+		path := fmt.Sprintf("/api/v1/packages/%d", int(id))
 		updated := pkg("Updated Package", 200000)
 		status, body := doJSON(t, "PUT", path, updated, admin)
 		require.Equal(t, fiber.StatusOK, status)
@@ -1131,7 +1131,7 @@ func TestPackagesRoutes(t *testing.T) {
 	})
 
 	t.Run("admin can delete package", func(t *testing.T) {
-		path := fmt.Sprintf("/api/v1/packages?id=%d", int(deleteID))
+		path := fmt.Sprintf("/api/v1/packages/%d", int(deleteID))
 		status, body := doJSON(t, "DELETE", path, nil, admin)
 		require.Equal(t, fiber.StatusOK, status)
 		data, _ := body["data"].(map[string]any)
@@ -1140,7 +1140,7 @@ func TestPackagesRoutes(t *testing.T) {
 		require.NotEmpty(t, undoToken, "undo_token should not be empty")
 
 		// Delete: package should not appear in list
-		status, _ = doJSON(t, "GET", path, nil, nil)
+		status, _ = doJSON(t, "GET", fmt.Sprintf("/api/v1/packages?id=%d", int(deleteID)), nil, nil)
 		assert.Equal(t, fiber.StatusNotFound, status, "deleted package should not be accessible")
 	})
 

@@ -114,9 +114,9 @@ func (ac *ApplicantController) SavePackage(c *fiber.Ctx) error {
 
 // UpdatePackage updates an existing package by ID (admin only)
 func (ac *ApplicantController) UpdatePackage(c *fiber.Ctx) error {
-	idStr := c.Query("id")
+	idStr := c.Params("id")
 	if idStr == "" {
-		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Package id is required as query parameter")
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Package id is required")
 	}
 
 	id, err := strconv.Atoi(idStr)
@@ -157,9 +157,9 @@ func (ac *ApplicantController) UpdatePackage(c *fiber.Ctx) error {
 
 // DeletePackage soft-deletes a package with Redis undo token (leazi pattern - admin only)
 func (ac *ApplicantController) DeletePackage(c *fiber.Ctx) error {
-	idStr := c.Query("id")
+	idStr := c.Params("id")
 	if idStr == "" {
-		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Package id is required as query parameter")
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Package id is required")
 	}
 
 	id, err := strconv.Atoi(idStr)

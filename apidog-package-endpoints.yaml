@@ -151,23 +151,30 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Package with this name already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '500':
           description: Failed to save package
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /packages/{id}:
     put:
       tags:
         - Packages
       summary: Update a package
-      description: Updates an existing package by ID using ?id= query parameter (admin only, requires JWT authentication)
+      description: Updates an existing package by ID using path parameter (admin only, requires JWT authentication)
       operationId: updatePackage
       security:
         - bearerAuth: []
       parameters:
         - name: id
-          in: query
+          in: path
           required: true
           description: Package ID
           schema:
@@ -244,13 +251,13 @@ paths:
       tags:
         - Packages
       summary: Delete a package
-      description: Soft-deletes a package by ID using ?id= query parameter (admin only, requires JWT authentication). Returns an undo_token for restoration.
+      description: Soft-deletes a package by ID using path parameter (admin only, requires JWT authentication). Returns an undo_token for restoration.
       operationId: deletePackage
       security:
         - bearerAuth: []
       parameters:
         - name: id
-          in: query
+          in: path
           required: true
           description: Package ID
           schema:
