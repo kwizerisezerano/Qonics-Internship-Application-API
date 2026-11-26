@@ -165,6 +165,8 @@ components:
           type: string
         duration_months:
           type: integer
+          description: Duration in months specified by the applicant (1-24).
+          example: 3
         work_mode:
           type: string
         amount:
@@ -192,7 +194,7 @@ components:
 
     Package:
       type: object
-      required: [name, price, skills, duration_months]
+      required: [name, price, skills, period]
       properties:
         id:
           type: integer
@@ -206,17 +208,18 @@ components:
         price:
           type: number
           minimum: 0
-          description: Total price for the package.
+          description: Price per period (monthly by default).
           example: 150000
         skills:
           type: array
           items:
             type: string
           example: ["coding", "design"]
-        duration_months:
-          type: integer
-          minimum: 1
-          example: 3
+        period:
+          type: string
+          enum: [monthly, yearly, quarterly]
+          description: Billing period (default: monthly).
+          example: monthly
         currency:
           type: string
           example: RWF
@@ -875,7 +878,9 @@ paths:
         the call answers 409 and asks them to log in. Logged-in applicants apply
         under their own account as before.
 
-        The package_id determines the price, duration, and skills included in the training.
+        The package_id determines the price (per period) and skills included in the training.
+        The duration_months is specified by the applicant (1-24 months). Total amount is calculated
+        as package price × duration_months.
         Guests can attach documents: upload each file first with
         `POST /files/guest/presigned-url` (no token needed; the first response
         returns a `guest_token`, send it back with later uploads, max 5 files),
@@ -889,27 +894,70 @@ paths:
       requestBody:
         required: true
         content:
-          multipart/form-data:
+          application/json:
             schema:
               type: object
               required:
-                - payload
+                - package_id
+                - duration_months
+                - motivation
+                - experience
+                - education_level
+                - session
+                - work_mode
               properties:
-                payload:
+                full_name:
                   type: string
-                  format: binary
-                cv:
+                  description: Required for guests only
+                email:
                   type: string
-                  format: binary
-                cover_letter:
+                  format: email
+                  description: Required for guests only
+                phone:
                   type: string
-                  format: binary
-                transcript:
+                  description: Required for guests only
+                package_id:
+                  type: integer
+                  minimum: 1
+                  description: Required: Select from available packages for pricing
+                duration_months:
+                  type: integer
+                  minimum: 1
+                  maximum: 24
+                  description: Required: Number of months (1-24). Total amount = package.price × duration_months
+                department:
                   type: string
-                  format: binary
-                portfolio:
+                  description: Optional: Kept for historical records alongside package selection
+                specialization:
                   type: string
-                  format: binary
+                  description: Optional: Kept for historical records alongside package selection
+                motivation:
+                  type: string
+                  maxLength: 2000
+                experience:
+                  type: string
+                  maxLength: 2000
+                start_date:
+                  type: string
+                  format: date-time
+                education_level:
+                  type: string
+                  enum: [university, high_school]
+                session:
+                  type: string
+                  enum: [morning, afternoon]
+                work_mode:
+                  type: string
+                  enum: [onsite, remote, hybrid]
+                document_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                  description: Optional: IDs of confirmed uploaded documents
+                guest_token:
+                  type: string
+                  description: Required if document_ids is provided (for guests)
       responses:
         '200':
           description: Application created
@@ -1229,26 +1277,34 @@ paths:
     get:
       tags:
         - Public
-      summary: List packages
+      summary: List packages or get single package
       description: >-
-        Available training packages (no login). Paginated. Each package includes
-        pricing, skills, and duration.
+        Available training packages (no login). Paginated list when no ?id= parameter.
+        When ?id= is provided, returns a single package by ID.
       security: []
       parameters:
         - {name: page, in: query, schema: {type: integer, default: 1}}
         - {name: limit, in: query, schema: {type: integer, default: 10, maximum: 100}}
+        - {name: id, in: query, schema: {type: integer}, description: "Package ID to get a single package. If omitted, lists all packages."}
       responses:
         '200':
           description: Packages retrieved
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Package'
+                oneOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Package'
+                      meta:
+                        $ref: '#/components/schemas/PaginationMeta'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Package'
     post:
       tags:
         - Settings
@@ -1272,38 +1328,16 @@ paths:
           description: Missing or invalid token
         '403':
           description: Not an admin
-
-  /packages/{id}:
-    get:
-      tags:
-        - Public
-      summary: Get package by ID
-      description: Get a single package by ID (no login required)
-      security: []
-      parameters:
-        - {name: id, in: path, required: true, schema: {type: integer}}
-      responses:
-        '200':
-          description: Package retrieved
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  data:
-                    $ref: '#/components/schemas/Package'
-        '404':
-          description: Package not found
     put:
       tags:
         - Settings
-      summary: Update a package (admin)
+      summary: Update package (admin)
       description: >-
-        Admin only. Updates an existing package by ID.
+        Admin only. Updates an existing package by ID using ?id= query parameter.
       security:
         - bearerAuth: []
       parameters:
-        - {name: id, in: path, required: true, schema: {type: integer}}
+        - {name: id, in: query, required: true, schema: {type: integer}, description: "Package ID to update"}
       requestBody:
         required: true
         content:
@@ -1324,15 +1358,20 @@ paths:
     delete:
       tags:
         - Settings
-      summary: Delete a package (admin)
-      description: Remove a package by ID
+      summary: Delete package (admin)
+      description: >-
+        Admin only. Deletes a package by ID using ?id= query parameter.
       security:
         - bearerAuth: []
       parameters:
-        - {name: id, in: path, required: true, schema: {type: integer}}
+        - {name: id, in: query, required: true, schema: {type: integer}, description: "Package ID to delete"}
       responses:
         '200':
           description: Package deleted
+        '401':
+          description: Missing or invalid token
+        '403':
+          description: Not an admin
         '404':
           description: Package not found
 

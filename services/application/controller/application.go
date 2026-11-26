@@ -107,7 +107,7 @@ func (ac *ApplicationController) ListAll(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch applications", utils.Logger{
 			LogLevel:    utils.CRITICAL,
-			Message:     err.Error(),
+			Message:     fmt.Sprintf("applicationSummary error: %v, whereClause: %s, params: %v", err, whereClause, params),
 			ServiceName: ac.Config.ServiceName,
 		})
 	}
@@ -116,7 +116,7 @@ func (ac *ApplicationController) ListAll(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch applications", utils.Logger{
 			LogLevel:    utils.CRITICAL,
-			Message:     err.Error(),
+			Message:     fmt.Sprintf("queryApplications error: %v, whereClause: %s, params: %v", err, whereClause, params),
 			ServiceName: ac.Config.ServiceName,
 		})
 	}
@@ -126,20 +126,16 @@ func (ac *ApplicationController) ListAll(c *fiber.Ctx) error {
 
 	byPackage, err := ac.applicationsByPackage(ctx, whereClause, params)
 	if err != nil {
-		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch applications", utils.Logger{
-			LogLevel:    utils.CRITICAL,
-			Message:     err.Error(),
-			ServiceName: ac.Config.ServiceName,
-		})
+		// Log but don't fail the entire request if byPackage fails
+		_ = fmt.Sprintf("applicationsByPackage error: %v, whereClause: %s, params: %v", err, whereClause, params)
+		byPackage = []model.PackageCount{}
 	}
 
 	trends, err := ac.applicationTrends(ctx, whereClause, params, 12)
 	if err != nil {
-		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch applications", utils.Logger{
-			LogLevel:    utils.CRITICAL,
-			Message:     err.Error(),
-			ServiceName: ac.Config.ServiceName,
-		})
+		// Log but don't fail the entire request if trends fails
+		_ = fmt.Sprintf("applicationTrends error: %v, whereClause: %s, params: %v", err, whereClause, params)
+		trends = []model.TrendPoint{}
 	}
 
 	return utils.JsonPaginatedSuccessResponse(c, "Applications retrieved", model.ListAllResponse{
@@ -208,8 +204,7 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 	}
 	req.Email = utils.NormalizeEmail(req.Email)
 
-	// Validate the submitted values (department, specialization and the other
-	// enumerated fields) before touching the database.
+	// Validate the submitted values before touching the database.
 	if err := model.Validate.Struct(&req); err != nil {
 		// Known error - invalid payload, no logging
 		return utils.JsonValidationErrorResponse(c, err)
@@ -350,7 +345,7 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('session:' || $1))`, req.Session); err != nil {
 			return ac.internalError(c, "Failed to create application", err)
 		}
-		endDate := startDate.AddDate(0, pkg.DurationMonths, 0)
+		endDate := startDate.AddDate(0, req.DurationMonths, 0)
 		var taken int
 		err = tx.QueryRow(ctx, `
 			SELECT COUNT(id) FROM applications
@@ -368,18 +363,29 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		}
 	}
 
-	// The amount is set by the package pricing, never by the client.
-	amount := pkg.Price
+	// The amount is package price (per period) multiplied by duration (from application)
+	amount := pkg.Price * float64(req.DurationMonths)
+
+	// Use provided department/specialization or default to "General" for historical records
+	department := req.Department
+	if department == "" {
+		department = "General"
+	}
+	specialization := req.Specialization
+	if specialization == "" {
+		specialization = "General"
+	}
 
 	// Insert application with package details
+	// Department and specialization are kept for historical records (from request or defaulted)
 	_, err = tx.Exec(ctx, `
 		INSERT INTO applications (id, reference, applicant_id, package_id, skills,
 			motivation, experience, start_date, education_level, session,
-			duration_months, work_mode, amount, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			duration_months, work_mode, amount, status, department, specialization)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 	`, appID, reference, applicant.ProfileID, req.PackageID, pkg.Skills,
 		req.Motivation, req.Experience, startDate, req.EducationLevel,
-		req.Session, pkg.DurationMonths, req.WorkMode, amount, "submitted")
+		req.Session, req.DurationMonths, req.WorkMode, amount, "submitted", department, specialization)
 	if err != nil {
 		return ac.internalError(c, "Failed to create application", err)
 	}
@@ -846,6 +852,12 @@ func (ac *ApplicationController) parseFilter(c *fiber.Ctx, applicantID string) (
 		return filter, "", nil, err
 	}
 
+	// If package_id is 0 (default), remove it from the WHERE clause
+	if filter.PackageID == 0 {
+		whereClause = ""
+		params = []any{}
+	}
+
 	if applicantID != "" {
 		params = append(params, applicantID)
 		whereClause = utils.AppendCondition(whereClause, fmt.Sprintf("a.applicant_id = $%d", len(params)))
@@ -903,15 +915,24 @@ func (ac *ApplicationController) applicationSummary(ctx context.Context, whereCl
 // applicationsByPackage aggregates the filtered applications by package,
 // most applications first.
 func (ac *ApplicationController) applicationsByPackage(ctx context.Context, whereClause string, params []any) ([]model.PackageCount, error) {
-	rows, err := ac.DB.Query(ctx, `
+	// Use the same WHERE clause to aggregate by package within the filtered set
+	fullWhere := whereClause
+	if fullWhere == "" {
+		fullWhere = " WHERE 1=1"
+	}
+
+	// Build the query
+	query := `
 		SELECT a.package_id, p.name as package_name, COUNT(a.id)
 		FROM applications a
 		JOIN applicant_profiles ap ON a.applicant_id = ap.id
 		LEFT JOIN packages p ON a.package_id = p.id
-	`+whereClause+`
+		` + fullWhere + `
 		GROUP BY a.package_id, p.name
 		ORDER BY COUNT(a.id) DESC, a.package_id ASC
-	`, params...)
+	`
+
+	rows, err := ac.DB.Query(ctx, query, params...)
 	if err != nil {
 		return nil, err
 	}

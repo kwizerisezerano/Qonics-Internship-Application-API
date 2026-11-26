@@ -127,14 +127,15 @@ Public (no token for guests). Same body as today, plus the guest fields:
   "email": "jane@example.com",
   "phone": "+250788123456",
 
-  "department": "software",
-  "specialization": "backend",
+  "package_id": 1,
+  "duration_months": 3,
+  "department": "software",        // Optional: for historical records
+  "specialization": "backend",     // Optional: for historical records
   "motivation": "...",
   "experience": "...",
   "start_date": "2026-12-15T00:00:00Z",
   "education_level": "university",
   "session": "morning",
-  "duration_months": 3,
   "work_mode": "remote",
 
   "document_ids": ["file-id-1", "file-id-2"],
@@ -147,6 +148,10 @@ Public (no token for guests). Same body as today, plus the guest fields:
 | `full_name` | **required** | Letters, spaces, hyphens and apostrophes only. **Digits are rejected.** Max 150 characters. |
 | `email` | **required** | Valid email. Lowercased server-side. |
 | `phone` | **required** | Same rule as registration, for example `+250788123456`. Max 30 characters. |
+| `package_id` | **required** | Must be a valid package ID from `GET /packages`. |
+| `duration_months` | **required** | Number of months (1-24). The total amount is calculated as `package.price × duration_months`. |
+| `department` | optional | Kept for historical records. Defaults to "General" if not provided. |
+| `specialization` | optional | Kept for historical records. Defaults to "General" if not provided. |
 | `document_ids` | optional | Only the confirmed ids from section 3. |
 | `guest_token` | required **if** `document_ids` is sent | Must be the token those files were uploaded with. |
 
@@ -250,6 +255,8 @@ curl -X POST 'BASE/applications' \
     "full_name":"Jane Doe",
     "email":"jane@example.com",
     "phone":"+250788123456",
+    "package_id":1,
+    "duration_months":3,
     "department":"software",
     "specialization":"backend",
     "motivation":"I want to learn",
@@ -257,7 +264,6 @@ curl -X POST 'BASE/applications' \
     "start_date":"2026-12-15T00:00:00Z",
     "education_level":"university",
     "session":"morning",
-    "duration_months":3,
     "work_mode":"remote",
     "document_ids":["FILE_ID","FILE_ID_2"],
     "guest_token":"GUEST_TOKEN"
@@ -315,15 +321,15 @@ Interactive API docs for `POST /applications` are in `openapi.yaml`.
 
 ## 10. Packages
 
-Applicants select a training package which includes pricing, skills, and duration. Each package has a fixed price.
+Applicants select a training package which includes pricing, skills, and billing period. Each package has a fixed price per period (default: monthly).
 
 - `GET /packages` (public): list all available packages with their pricing and skills.
-- `GET /packages/:id` (public): get details of a specific package.
+- `GET /packages?id=1` (public): get details of a specific package by ID using query parameter.
 - `POST /packages` (admin): create a new package.
-- `PUT /packages/:id` (admin): update an existing package.
-- `DELETE /packages/:id` (admin): delete a package.
+- `PUT /packages?id=1` (admin): update an existing package by ID using query parameter.
+- `DELETE /packages?id=1` (admin): delete a package by ID using query parameter.
 
-The application payload must include `package_id`. The backend calculates the amount from the package price and returns it as `amount`.
+The application payload must include `package_id` and `duration_months`. The backend calculates the total amount as `package.price × duration_months` and returns it as `amount`.
 
 Suggested text for the on-site morning session:
 "On-site, morning session (09:00 - 11:00): this is a paid session. The fee includes a coffee break."

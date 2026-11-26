@@ -1,7 +1,7 @@
 APP_BINARY = app-release
 POSTGRES_IMAGE = qonics-postgres-pgcrypto
 
-.PHONY: up up_build build down stop auth applicant application notification file shared-package recreate_postgres_test test_db test
+.PHONY: up up_build build down stop auth applicant application notification file shared-package recreate_postgres_test test redis_up redis_down
 
 ## up: starts all containers in the background without forcing build
 up:
@@ -10,7 +10,7 @@ up:
 	@echo "Docker images started"
 
 ## up_build: stops docker compose (if running), builds all projects with tests, and starts docker compose
-up_build: recreate_postgres_test shared-package auth applicant application notification file
+up_build: recreate_postgres_test redis_up shared-package auth applicant application notification file redis_down
 	@echo "Stopping docker images (if running...)"
 	docker compose down
 	@echo "Building (when required) and starting docker images..."
@@ -63,7 +63,7 @@ application:
 notification:
 	@echo "Building notification worker binary..."
 	cd ./services/notification && go mod tidy
-	cd ./services/notification/controller && go test -v
+	cd ./services/notification && go test -v
 	cd ./services/notification && env GOOS=linux CGO_ENABLED=0 go build -o ${APP_BINARY} -buildvcs=false
 	@echo "Done!"
 
@@ -71,7 +71,7 @@ notification:
 file:
 	@echo "Building file service binary..."
 	cd ./services/file && go mod tidy
-	cd ./services/file/controller && go test -v
+	cd ./services/file && go test -v
 	cd ./services/file && env GOOS=linux CGO_ENABLED=0 go build -o ${APP_BINARY} -buildvcs=false
 	@echo "Done!"
 
@@ -81,6 +81,26 @@ shared-package:
 	cd ./libs/shared-package && go mod tidy
 	cd ./libs/shared-package && go test -v ./...
 	@echo "Done!"
+
+## start Redis for testing
+redis_up:
+	@echo "Starting test services..."
+	@if lsof -i :6379 > /dev/null 2>&1; then \
+		echo "Redis port 6379 already in use, skipping..."; \
+	else \
+		docker compose -f ./libs/shared-package/tests/docker-compose.test.yml up -d; \
+		echo "Waiting for services to be ready..."; \
+		sleep 5; \
+	fi
+
+## stop redis
+redis_down:
+	@echo "Cleaning up redis service..."
+	@if docker compose -f ./libs/shared-package/tests/docker-compose.test.yml ps -q 2>/dev/null | grep -q .; then \
+		docker compose -f ./libs/shared-package/tests/docker-compose.test.yml down; \
+	else \
+		echo "No test Redis container to clean up, skipping..."; \
+	fi
 
 ## recreate_postgres_test: Delete and recreate Docker container for PostgreSQL test
 recreate_postgres_test:
@@ -105,7 +125,11 @@ recreate_postgres_test:
 		fi; \
 		sleep 1; \
 	done
-	@echo "PostgreSQL test container recreated!"
+	@echo "Applying migrations to test database..."
+	@for f in ./libs/shared-package/migration/*_up.sql; do \
+		docker exec -i qonics-postgres-test psql -U postgres -d qonics_test_db < $$f; \
+	done
+	@echo "PostgreSQL test container recreated and migrations applied!"
 
 ## redis: Start Redis (needed by the auth, applicant and application tests)
 redis:

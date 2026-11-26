@@ -38,11 +38,11 @@ func SetupRoutes(app *fiber.App, applicantController *controller.ApplicantContro
 	api.Get("/settings/public", applicantController.GetPublicSettings)
 
 	// Packages: public read, admin write. Public route registered first (see above).
+	// GET /packages - list all packages (no ?id=) or get single package (?id=)
 	api.Get("/packages", applicantController.ListPackages)
-	api.Get("/packages/:id", applicantController.GetPackage)
 	api.Post("/packages", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.SavePackage)
-	api.Put("/packages/:id", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.UpdatePackage)
-	api.Delete("/packages/:id", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.DeletePackage)
+	api.Put("/packages", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.UpdatePackage)    // Uses ?id= query param
+	api.Delete("/packages", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.DeletePackage) // Uses ?id= query param
 
 	// Settings routes (admin)
 	settings := api.Group("/settings")

@@ -152,8 +152,16 @@ type NewApplicationPayload struct {
 	Email    string `json:"email" validate:"omitempty,email"`
 	Phone    string `json:"phone" validate:"omitempty,max=30,phone"`
 
-	// Package selection replaces department/specialization/duration_months
+	// Package selection is required for pricing
 	PackageID int `json:"package_id" validate:"required,min=1"`
+
+	// Duration in months is specified by the applicant
+	DurationMonths int `json:"duration_months" validate:"required,min=1,max=24"`
+
+	// Department and specialization are optional - kept for historical records
+	// Frontend can send these along with package_id
+	Department     string `json:"department" validate:"omitempty"`
+	Specialization string `json:"specialization" validate:"omitempty"`
 
 	Motivation     string   `json:"motivation" validate:"required,max=2000"`
 	Experience     string   `json:"experience" validate:"required,max=2000"`

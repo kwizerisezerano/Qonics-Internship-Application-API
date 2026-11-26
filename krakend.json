@@ -527,35 +527,13 @@
       ],
       "input_query_strings": [
         "page",
-        "limit"
+        "limit",
+        "id"
       ],
       "backend": [
         {
           "host": ["http://applicant:9000"],
           "url_pattern": "/api/v1/packages",
-          "encoding": "no-op",
-          "sd": "static",
-          "disable_host_sanitize": true,
-          "extra_config": {
-            "backend/http": {
-              "return_error_details": "backend_alias",
-              "status": [200, 500]
-            }
-          }
-        }
-      ]
-    },
-    {
-      "endpoint": "/packages/{id}",
-      "method": "GET",
-      "output_encoding": "no-op",
-      "input_headers": [
-        "Accept"
-      ],
-      "backend": [
-        {
-          "host": ["http://applicant:9000"],
-          "url_pattern": "/api/v1/packages/{id}",
           "encoding": "no-op",
           "sd": "static",
           "disable_host_sanitize": true,
@@ -594,7 +572,7 @@
       ]
     },
     {
-      "endpoint": "/packages/{id}",
+      "endpoint": "/packages",
       "method": "PUT",
       "output_encoding": "no-op",
       "input_headers": [
@@ -603,10 +581,13 @@
         "Authorization",
         "authorization"
       ],
+      "input_query_strings": [
+        "id"
+      ],
       "backend": [
         {
           "host": ["http://applicant:9000"],
-          "url_pattern": "/api/v1/packages/{id}",
+          "url_pattern": "/api/v1/packages",
           "encoding": "no-op",
           "disable_host_sanitize": true,
           "extra_config": {
@@ -619,7 +600,7 @@
       ]
     },
     {
-      "endpoint": "/packages/{id}",
+      "endpoint": "/packages",
       "method": "DELETE",
       "output_encoding": "no-op",
       "input_headers": [
@@ -628,10 +609,13 @@
         "Authorization",
         "authorization"
       ],
+      "input_query_strings": [
+        "id"
+      ],
       "backend": [
         {
           "host": ["http://applicant:9000"],
-          "url_pattern": "/api/v1/packages/{id}",
+          "url_pattern": "/api/v1/packages",
           "encoding": "no-op",
           "disable_host_sanitize": true,
           "extra_config": {

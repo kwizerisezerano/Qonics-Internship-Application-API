@@ -98,10 +98,9 @@ func init() {
 	// admin-only settings group so its middleware never runs for it.
 	applicantTestApp.Get("/api/v1/settings/public", controller.GetPublicSettings)
 	applicantTestApp.Get("/api/v1/packages", controller.ListPackages)
-	applicantTestApp.Get("/api/v1/packages/:id", controller.GetPackage)
 	applicantTestApp.Post("/api/v1/packages", auth, middleware.AdminMiddleware(), controller.SavePackage)
-	applicantTestApp.Put("/api/v1/packages/:id", auth, middleware.AdminMiddleware(), controller.UpdatePackage)
-	applicantTestApp.Delete("/api/v1/packages/:id", auth, middleware.AdminMiddleware(), controller.DeletePackage)
+	applicantTestApp.Put("/api/v1/packages", auth, middleware.AdminMiddleware(), controller.UpdatePackage)
+	applicantTestApp.Delete("/api/v1/packages", auth, middleware.AdminMiddleware(), controller.DeletePackage)
 
 	settings := applicantTestApp.Group("/api/v1/settings", auth, middleware.AdminMiddleware())
 	settings.Get("/", controller.GetSettings)
@@ -838,8 +837,8 @@ func TestUnauthorizedAccess(t *testing.T) {
 		{"GET", "/api/v1/settings/"},
 		{"PUT", "/api/v1/settings/"},
 		{"POST", "/api/v1/packages"},
-		{"PUT", "/api/v1/packages/1"},
-		{"DELETE", "/api/v1/packages/1"},
+		{"PUT", "/api/v1/packages?id=1"},
+		{"DELETE", "/api/v1/packages?id=1"},
 	}
 
 	for _, ep := range endpoints {
@@ -1015,11 +1014,11 @@ func TestPackagesRoutes(t *testing.T) {
 
 	pkg := func(name string, price any) map[string]any {
 		return map[string]any{
-			"name":            name,
-			"description":     "Test package",
-			"price":           price,
-			"skills":          []string{"coding", "design"},
-			"duration_months": 3,
+			"name":        name,
+			"description": "Test package",
+			"price":       price,
+			"skills":      []string{"coding", "design"},
+			"period":      "monthly",
 		}
 	}
 
@@ -1056,7 +1055,7 @@ func TestPackagesRoutes(t *testing.T) {
 	})
 
 	t.Run("public can get package by ID", func(t *testing.T) {
-		path := fmt.Sprintf("/api/v1/packages/%d", int(id))
+		path := fmt.Sprintf("/api/v1/packages?id=%d", int(id))
 		status, body := doJSON(t, "GET", path, nil, nil)
 		require.Equal(t, fiber.StatusOK, status)
 		data, _ := body["data"].(map[string]any)
@@ -1064,7 +1063,7 @@ func TestPackagesRoutes(t *testing.T) {
 	})
 
 	t.Run("admin can update package", func(t *testing.T) {
-		path := fmt.Sprintf("/api/v1/packages/%d", int(id))
+		path := fmt.Sprintf("/api/v1/packages?id=%d", int(id))
 		updated := pkg("Updated Package", 200000)
 		status, body := doJSON(t, "PUT", path, updated, admin)
 		require.Equal(t, fiber.StatusOK, status)
@@ -1074,7 +1073,7 @@ func TestPackagesRoutes(t *testing.T) {
 	})
 
 	t.Run("admin can delete package", func(t *testing.T) {
-		path := fmt.Sprintf("/api/v1/packages/%d", int(id))
+		path := fmt.Sprintf("/api/v1/packages?id=%d", int(id))
 		status, _ := doJSON(t, "DELETE", path, nil, admin)
 		require.Equal(t, fiber.StatusOK, status)
 
