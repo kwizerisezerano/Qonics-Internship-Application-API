@@ -83,6 +83,25 @@ func init() {
 		panic("Failed to seed packages: " + err.Error())
 	}
 
+	// Add deleted_at column to packages table for soft delete (leazi pattern)
+	if _, err := db.Exec(context.Background(), `
+		ALTER TABLE packages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE
+	`); err != nil {
+		panic("Failed to add deleted_at column: " + err.Error())
+	}
+
+	// Create index for deleted_at (leazi pattern)
+	if _, err := db.Exec(context.Background(), `
+		CREATE INDEX IF NOT EXISTS idx_packages_deleted_at ON packages(deleted_at)
+	`); err != nil {
+		panic("Failed to create index: " + err.Error())
+	}
+
+	// Clean up any existing soft-deleted packages
+	if _, err := db.Exec(context.Background(), `UPDATE packages SET deleted_at = NULL WHERE deleted_at IS NOT NULL`); err != nil {
+		// Ignore if column doesn't exist yet
+	}
+
 	controller := NewApplicationController(db, cfg, cfg.InitRedis())
 
 	applicationTestApp = fiber.New(fiber.Config{AppName: "application-service-test"})

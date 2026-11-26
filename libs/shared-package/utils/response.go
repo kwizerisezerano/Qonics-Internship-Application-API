@@ -32,8 +32,11 @@ type Logger struct {
 func JsonErrorResponse(c *fiber.Ctx, statusCode int, message string, logEntry ...Logger) error {
 	// Log the error if a logger is provided
 	if len(logEntry) > 0 && logEntry[0].Message != "" {
+		// In test mode, include the error message in the response for debugging
+		if IsTestMode {
+			message = message + ":" + logEntry[0].Message
+		}
 		// In a real implementation, you would log this using the logger
-		// For now, we'll just include it in the response for debugging
 	}
 
 	return c.Status(statusCode).JSON(fiber.Map{

@@ -42,7 +42,7 @@ func LookupPackage(ctx context.Context, db rowQuerier, packageID int) (*Package,
 		&pkg.Price,
 		&pkg.Skills,
 		&pkg.Period,
-		pkg.Currency,
+		&pkg.Currency,
 		&pkg.IsActive,
 	)
 	if err != nil {
