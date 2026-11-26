@@ -98,6 +98,24 @@ func init() {
 		// Ignore if column doesn't exist yet
 	}
 
+	// Clean up duplicate packages for test (keep lowest ID for each name)
+	if _, err := db.Exec(context.Background(), `
+		DELETE FROM packages p1
+		WHERE p1.id > (
+			SELECT MIN(p2.id) FROM packages p2
+			WHERE LOWER(p2.name) = LOWER(p1.name) AND p2.deleted_at IS NULL
+		) AND p1.deleted_at IS NULL
+	`); err != nil {
+		// Ignore if no duplicates
+	}
+
+	// Create unique index on lowercase name to prevent duplicates
+	if _, err := db.Exec(context.Background(), `
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_packages_name_unique ON packages (LOWER(name)) WHERE deleted_at IS NULL
+	`); err != nil {
+		panic("Failed to create unique index: " + err.Error())
+	}
+
 	controller := NewApplicantController(db, cfg, applicantTestRedis)
 
 	applicantTestApp = fiber.New(fiber.Config{AppName: "applicant-service-test"})

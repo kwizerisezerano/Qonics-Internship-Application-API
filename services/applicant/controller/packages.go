@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -90,27 +91,18 @@ func (ac *ApplicantController) SavePackage(c *fiber.Ctx) error {
 	}
 
 	ctx := context.Background()
-
-	// Check for duplicate package name (prevent duplicates)
-	var existingID int
-	err := ac.DB.QueryRow(ctx, `
-		SELECT id FROM packages
-		WHERE LOWER(name) = LOWER($1) AND deleted_at IS NULL
-	`, req.Name).Scan(&existingID)
-	if err == nil {
-		return utils.JsonErrorResponse(c, fiber.StatusConflict, "Package with this name already exists")
-	}
-	if err != pgx.ErrNoRows {
-		return ac.packagesDBError(c, "Failed to check for duplicates", err)
-	}
-
 	userID := utils.CurrentUserID(c)
-	err = ac.DB.QueryRow(ctx, `
+
+	err := ac.DB.QueryRow(ctx, `
 		INSERT INTO packages (name, description, price, skills, period, currency, updated_by)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id
 	`, req.Name, req.Description, req.Price, req.Skills, req.Period, req.Currency, userID).Scan(&req.ID)
 	if err != nil {
+		// Check for unique constraint violation (duplicate name)
+		if isDuplicateKeyError(err) {
+			return utils.JsonErrorResponse(c, fiber.StatusConflict, "Package with this name already exists")
+		}
 		return ac.packagesDBError(c, "Failed to save package", err)
 	}
 
@@ -285,4 +277,14 @@ func (ac *ApplicantController) packagesDBError(c *fiber.Ctx, message string, err
 		Message:     err.Error(),
 		ServiceName: ac.Config.ServiceName,
 	})
+}
+
+// isDuplicateKeyError checks if the error is a PostgreSQL unique constraint violation
+func isDuplicateKeyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// PostgreSQL unique constraint violation error code
+	errStr := err.Error()
+	return strings.Contains(errStr, "duplicate key") || strings.Contains(errStr, "23505")
 }
