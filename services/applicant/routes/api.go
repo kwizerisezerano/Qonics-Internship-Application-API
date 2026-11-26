@@ -43,7 +43,7 @@ func SetupRoutes(app *fiber.App, applicantController *controller.ApplicantContro
 	api.Post("/packages", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.SavePackage)
 	api.Put("/packages", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.UpdatePackage)           // Uses ?id= query param
 	api.Delete("/packages", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.DeletePackage)        // Uses ?id= query param
-	api.Post("/packages/restore", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.RestorePackage) // Uses ?id= query param
+	api.Post("/packages/restore", middleware.AuthMiddleware(jwtSecret), middleware.AdminMiddleware(), applicantController.RestorePackage) // Uses undo_token in body
 
 	// Settings routes (admin)
 	settings := api.Group("/settings")

@@ -14,10 +14,16 @@ paths:
     get:
       tags:
         - Packages
-      summary: List all packages
-      description: Returns a paginated list of all active packages (public endpoint, no authentication required)
+      summary: List all packages or get single package
+      description: Returns a paginated list of all active packages. If ?id= query parameter is provided, returns that single package instead. (public endpoint, no authentication required)
       operationId: listPackages
       parameters:
+        - name: id
+          in: query
+          description: Package ID to retrieve single package (optional)
+          schema:
+            type: integer
+          example: 1
         - name: page
           in: query
           description: Page number for pagination
@@ -36,7 +42,9 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PackagesEnvelope'
+                oneOf:
+                  - $ref: '#/components/schemas/PackageEnvelope'
+                  - $ref: '#/components/schemas/PackagesEnvelope'
               example:
                 status: 200
                 message: Packages retrieved
@@ -45,16 +53,22 @@ paths:
                     name: Basic Training Package
                     description: Coding and Design (Figma)
                     price: 150000
-                    skills: Coding, Design (Figma)
-                    duration_months: 3
+                    skills:
+                      - coding
+                      - design
+                    period: monthly
                     currency: RWF
                     is_active: true
                   - id: 2
                     name: Standard Training Package
                     description: Coding, Design (Figma), 3D Printing, and CNC
                     price: 250000
-                    skills: Coding, Design (Figma), 3D Printing, CNC
-                    duration_months: 6
+                    skills:
+                      - coding
+                      - design
+                      - 3d-printing
+                      - cnc
+                    period: monthly
                     currency: RWF
                     is_active: true
                 pagination:
@@ -62,6 +76,12 @@ paths:
                   page: 1
                   limit: 10
                   total_pages: 1
+        '404':
+          description: Package not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '500':
           description: Database error
           content:
@@ -86,9 +106,12 @@ paths:
               name: Basic Training Package
               description: Coding and Design (Figma)
               price: 150000
-              skills: Coding, Design (Figma)
-              duration_months: 3
+              skills:
+                - coding
+                - design
+              period: monthly
               currency: RWF
+              is_active: true
       responses:
         '200':
           description: Package created successfully
@@ -104,8 +127,10 @@ paths:
                   name: Basic Training Package
                   description: Coding and Design (Figma)
                   price: 150000
-                  skills: Coding, Design (Figma)
-                  duration_months: 3
+                  skills:
+                    - coding
+                    - design
+                  period: monthly
                   currency: RWF
                   is_active: true
         '400':
@@ -120,60 +145,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden - admin only
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '500':
           description: Failed to save package
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-  /packages/{id}:
-    get:
-      tags:
-        - Packages
-      summary: Get a package by ID
-      description: Returns a single package by ID (public endpoint, no authentication required)
-      operationId: getPackage
-      parameters:
-        - name: id
-          in: path
-          required: true
-          description: Package ID
-          schema:
-            type: integer
-          example: 1
-      responses:
-        '200':
-          description: Package retrieved successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/PackageEnvelope'
-              example:
-                status: 200
-                message: Package retrieved
-                data:
-                  id: 1
-                  name: Basic Training Package
-                  description: Coding and Design (Figma)
-                  price: 150000
-                  skills: Coding, Design (Figma)
-                  duration_months: 3
-                  currency: RWF
-                  is_active: true
-        '400':
-          description: Invalid package id
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '404':
-          description: Package not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '500':
-          description: Database error
           content:
             application/json:
               schema:
@@ -182,13 +161,13 @@ paths:
       tags:
         - Packages
       summary: Update a package
-      description: Updates an existing package by ID (admin only, requires JWT authentication)
+      description: Updates an existing package by ID using ?id= query parameter (admin only, requires JWT authentication)
       operationId: updatePackage
       security:
         - bearerAuth: []
       parameters:
         - name: id
-          in: path
+          in: query
           required: true
           description: Package ID
           schema:
@@ -204,9 +183,12 @@ paths:
               name: Updated Package Name
               description: Updated description
               price: 200000
-              skills: Updated skills
-              duration_months: 4
+              skills:
+                - coding
+                - design
+              period: monthly
               currency: RWF
+              is_active: true
       responses:
         '200':
           description: Package updated successfully
@@ -222,8 +204,10 @@ paths:
                   name: Updated Package Name
                   description: Updated description
                   price: 200000
-                  skills: Updated skills
-                  duration_months: 4
+                  skills:
+                    - coding
+                    - design
+                  period: monthly
                   currency: RWF
                   is_active: true
         '400':
@@ -234,6 +218,12 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '401':
           description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden - admin only
           content:
             application/json:
               schema:
@@ -254,13 +244,13 @@ paths:
       tags:
         - Packages
       summary: Delete a package
-      description: Deletes a package by ID (admin only, requires JWT authentication)
+      description: Soft-deletes a package by ID using ?id= query parameter (admin only, requires JWT authentication). Returns an undo_token for restoration.
       operationId: deletePackage
       security:
         - bearerAuth: []
       parameters:
         - name: id
-          in: path
+          in: query
           required: true
           description: Package ID
           schema:
@@ -272,11 +262,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SuccessEnvelope'
+                $ref: '#/components/schemas/UndoTokenEnvelope'
               example:
                 status: 200
                 message: Package deleted
-                data: null
+                data:
+                  undo_token: abc123def456...
         '400':
           description: Invalid package id
           content:
@@ -289,6 +280,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden - admin only
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '404':
           description: Package not found
           content:
@@ -297,6 +294,74 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '500':
           description: Failed to delete package
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /packages/restore:
+    post:
+      tags:
+        - Packages
+      summary: Restore a deleted package
+      description: Restores a soft-deleted package using undo token (admin only, requires JWT authentication)
+      operationId: restorePackage
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestoreRequest'
+            example:
+              undo_token: abc123def456...
+      responses:
+        '200':
+          description: Package restored successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackageEnvelope'
+              example:
+                status: 200
+                message: Package restored
+                data:
+                  id: 1
+                  name: Basic Training Package
+                  description: Coding and Design (Figma)
+                  price: 150000
+                  skills:
+                    - coding
+                    - design
+                  period: monthly
+                  currency: RWF
+                  is_active: true
+        '400':
+          description: Invalid request body or undo token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Forbidden - admin only
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Invalid or expired undo token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Failed to restore package
           content:
             application/json:
               schema:
@@ -321,14 +386,22 @@ components:
           type: string
           description: Package description
         price:
-          type: integer
+          type: number
+          format: float
           description: Package price in the specified currency
         skills:
+          type: array
+          items:
+            type: string
+          description: List of skills included
+        period:
           type: string
-          description: Comma-separated list of skills included
-        duration_months:
-          type: integer
-          description: Duration of the training program in months
+          description: Billing period (monthly, yearly, quarterly)
+          enum:
+            - monthly
+            - yearly
+            - quarterly
+          default: monthly
         currency:
           type: string
           description: Currency code (e.g., RWF, USD)
@@ -343,7 +416,7 @@ components:
         - description
         - price
         - skills
-        - duration_months
+        - period
       properties:
         name:
           type: string
@@ -352,18 +425,56 @@ components:
           type: string
           example: Coding and Design (Figma)
         price:
-          type: integer
+          type: number
+          format: float
           example: 150000
         skills:
+          type: array
+          items:
+            type: string
+          example:
+            - coding
+            - design
+        period:
           type: string
-          example: Coding, Design (Figma)
-        duration_months:
-          type: integer
-          example: 3
+          enum:
+            - monthly
+            - yearly
+            - quarterly
+          example: monthly
+          default: monthly
         currency:
           type: string
           example: RWF
           default: RWF
+        is_active:
+          type: boolean
+          example: true
+          default: true
+    RestoreRequest:
+      type: object
+      required:
+        - undo_token
+      properties:
+        undo_token:
+          type: string
+          description: Undo token returned from delete operation
+          example: abc123def456...
+    UndoTokenEnvelope:
+      type: object
+      properties:
+        status:
+          type: integer
+          example: 200
+        message:
+          type: string
+        data:
+          type: object
+          properties:
+            undo_token:
+              type: string
+              description: Single-use token for restoring the deleted package
+              example: abc123def456...
     PackageEnvelope:
       type: object
       properties:

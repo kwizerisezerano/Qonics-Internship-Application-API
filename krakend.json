@@ -637,9 +637,6 @@
         "Authorization",
         "authorization"
       ],
-      "input_query_strings": [
-        "id"
-      ],
       "backend": [
         {
           "host": ["http://applicant:9000"],

@@ -83,16 +83,28 @@ curl -X PUT "http://localhost:8080/packages?id=1" \
   }'
 ```
 
-### Delete Package (Admin - Soft Delete)
+### Delete Package (Admin - Returns Undo Token)
 ```bash
 curl -X DELETE "http://localhost:8080/packages?id=1" \
   -H "Authorization: Bearer YOUR_JWT_TOKEN"
 ```
+Response includes an `undo_token` for restoration:
+```json
+{
+  "status": 200,
+  "message": "Package deleted",
+  "data": {
+    "undo_token": "abc123..."
+  }
+}
+```
 
-### Restore Deleted Package (Admin)
+### Restore Deleted Package (Admin - Using Undo Token)
 ```bash
-curl -X POST "http://localhost:8080/packages/restore?id=1" \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+curl -X POST "http://localhost:8080/packages/restore" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"undo_token": "abc123..."}'
 ```
 
 ## Notes
@@ -100,6 +112,9 @@ curl -X POST "http://localhost:8080/packages/restore?id=1" \
 - `skills` is an array of strings, not a comma-separated string
 - `period` indicates billing frequency (monthly/yearly/quarterly), not duration
 - Duration is tracked on the application table, not the package table
-- Delete operations are soft deletes - packages can be restored by admins
+- Delete sets `deleted_at` on packages table (leazi pattern - same table, no separate deleted table)
+- Undo token is stored in Redis with 7-day TTL (single-use token pattern)
 - Only admin users can create, update, delete, or restore packages
 - Public users can list and view active packages
+- Undo tokens expire after 7 days and are single-use (deleted after use)
+- After TTL expires, a cleanup worker can hard-delete packages (like file cleanup)

@@ -21,6 +21,7 @@ import (
 	"github.com/qonics/qonics-appy-api/libs/shared-package/middleware"
 	"github.com/qonics/qonics-appy-api/libs/shared-package/utils"
 	"github.com/qonics/qonics-appy-api/services/applicant/model"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,9 +30,10 @@ import (
 // once, then every route is exercised by a single table-driven test function
 // carrying several scenario payloads.
 var (
-	applicantTestApp *fiber.App
-	applicantTestDB  *pgxpool.Pool
-	applicantTestCfg *config.Config
+	applicantTestApp   *fiber.App
+	applicantTestDB    *pgxpool.Pool
+	applicantTestRedis *redis.Client
+	applicantTestCfg   *config.Config
 )
 
 // testJWTSecret is used to sign the tokens consumed by the real auth
@@ -64,6 +66,9 @@ func init() {
 	}
 	applicantTestDB = db
 
+	// Initialize Redis for tests
+	applicantTestRedis = cfg.InitRedis()
+
 	// Deterministic settings row so the settings route table has a stable
 	// baseline to compare "no changes" against on every run.
 	if _, err := db.Exec(context.Background(), `
@@ -74,21 +79,26 @@ func init() {
 		panic("Failed to reset settings: " + err.Error())
 	}
 
-	// Add deleted_at column to packages table for soft delete support
+	// Add deleted_at column to packages table for soft delete (leazi pattern)
 	if _, err := db.Exec(context.Background(), `
 		ALTER TABLE packages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE
 	`); err != nil {
 		panic("Failed to add deleted_at column: " + err.Error())
 	}
 
-	// Create index for filtering non-deleted packages
+	// Create index for deleted_at (leazi pattern)
 	if _, err := db.Exec(context.Background(), `
-		CREATE INDEX IF NOT EXISTS idx_packages_not_deleted ON packages (deleted_at) WHERE deleted_at IS NULL
+		CREATE INDEX IF NOT EXISTS idx_packages_deleted_at ON packages(deleted_at)
 	`); err != nil {
 		panic("Failed to create index: " + err.Error())
 	}
 
-	controller := NewApplicantController(db, cfg)
+	// Clean up any existing soft-deleted packages
+	if _, err := db.Exec(context.Background(), `UPDATE packages SET deleted_at = NULL WHERE deleted_at IS NOT NULL`); err != nil {
+		// Ignore if column doesn't exist yet
+	}
+
+	controller := NewApplicantController(db, cfg, applicantTestRedis)
 
 	applicantTestApp = fiber.New(fiber.Config{AppName: "applicant-service-test"})
 
@@ -854,7 +864,7 @@ func TestUnauthorizedAccess(t *testing.T) {
 		{"POST", "/api/v1/packages"},
 		{"PUT", "/api/v1/packages?id=1"},
 		{"DELETE", "/api/v1/packages?id=1"},
-		{"POST", "/api/v1/packages/restore?id=1"},
+		{"POST", "/api/v1/packages/restore"},
 	}
 
 	for _, ep := range endpoints {
@@ -1098,26 +1108,41 @@ func TestPackagesRoutes(t *testing.T) {
 
 	t.Run("admin can delete package", func(t *testing.T) {
 		path := fmt.Sprintf("/api/v1/packages?id=%d", int(deleteID))
-		status, _ := doJSON(t, "DELETE", path, nil, admin)
+		status, body := doJSON(t, "DELETE", path, nil, admin)
 		require.Equal(t, fiber.StatusOK, status)
+		data, _ := body["data"].(map[string]any)
+		undoToken, ok := data["undo_token"].(string)
+		require.True(t, ok, "undo_token should be returned on delete")
+		require.NotEmpty(t, undoToken, "undo_token should not be empty")
 
-		// Soft delete: package should still exist but not appear in list
+		// Delete: package should not appear in list
 		status, _ = doJSON(t, "GET", path, nil, nil)
-		assert.Equal(t, fiber.StatusNotFound, status, "soft-deleted package should not be accessible via public endpoint")
+		assert.Equal(t, fiber.StatusNotFound, status, "deleted package should not be accessible")
 	})
 
-	t.Run("admin can restore package", func(t *testing.T) {
-		path := fmt.Sprintf("/api/v1/packages/restore?id=%d", int(deleteID))
-		status, body := doJSON(t, "POST", path, nil, admin)
+	t.Run("admin can restore package with undo token", func(t *testing.T) {
+		// For testing, we'll manually set the undo token in Redis using deleteID
+		// (leazi pattern - package is still in same table with deleted_at set)
+		undoToken := "test_undo_token_1234567890abcdef"
+		undoKey := fmt.Sprintf("package:undo:%s", undoToken)
+		err := applicantTestRedis.Set(context.Background(), undoKey, int(deleteID), 7*24*time.Hour).Err()
+		require.NoError(t, err, "should be able to set undo token in Redis")
+
+		restorePayload := map[string]string{"undo_token": undoToken}
+		status, body := doJSON(t, "POST", "/api/v1/packages/restore", restorePayload, admin)
 		require.Equal(t, fiber.StatusOK, status)
 		data, _ := body["data"].(map[string]any)
 		assert.Equal(t, "Delete Test Package", data["name"])
 
-		// Verify restored package is accessible again
-		path = fmt.Sprintf("/api/v1/packages?id=%d", int(deleteID))
+		// Verify restored package is accessible again (leazi pattern - same table)
+		path := fmt.Sprintf("/api/v1/packages?id=%d", int(deleteID))
 		status, body = doJSON(t, "GET", path, nil, nil)
 		require.Equal(t, fiber.StatusOK, status)
 		data, _ = body["data"].(map[string]any)
 		assert.Equal(t, "Delete Test Package", data["name"])
+
+		// Verify undo token was deleted from Redis (single-use)
+		_, err = applicantTestRedis.Get(context.Background(), undoKey).Result()
+		assert.Equal(t, redis.Nil, err, "undo token should be deleted after use")
 	})
 }

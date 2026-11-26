@@ -29,6 +29,10 @@ func main() {
 	}
 	defer db.Close()
 
+	// Initialize Redis
+	rdb := cfg.InitRedis()
+	defer rdb.Close()
+
 	// Initialize Fiber app
 	app := fiber.New(fiber.Config{
 		AppName:      cfg.ServiceName,
@@ -36,7 +40,7 @@ func main() {
 	})
 
 	// Initialize controllers
-	applicantController := controller.NewApplicantController(db, cfg)
+	applicantController := controller.NewApplicantController(db, cfg, rdb)
 
 	// Setup routes
 	routes.SetupRoutes(app, applicantController, cfg.JWT.Secret)

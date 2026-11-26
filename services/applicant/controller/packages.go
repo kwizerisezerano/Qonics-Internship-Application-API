@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/qonics/qonics-appy-api/libs/shared-package/utils"
 	"github.com/qonics/qonics-appy-api/services/applicant/model"
+	"github.com/redis/go-redis/v9"
 )
 
 // ListPackages returns all available packages (public), paginated
@@ -146,7 +148,7 @@ func (ac *ApplicantController) UpdatePackage(c *fiber.Ctx) error {
 	return utils.JsonSuccessResponse(c, "Package updated", req)
 }
 
-// DeletePackage soft-deletes a package (admin only)
+// DeletePackage soft-deletes a package with Redis undo token (leazi pattern - admin only)
 func (ac *ApplicantController) DeletePackage(c *fiber.Ctx) error {
 	idStr := c.Query("id")
 	if idStr == "" {
@@ -158,7 +160,17 @@ func (ac *ApplicantController) DeletePackage(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid package id")
 	}
 
-	result, err := ac.DB.Exec(context.Background(), `
+	// Generate undo token (leazi-style secure random token)
+	undoToken, err := utils.SecureRandString(32)
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to generate undo token")
+	}
+
+	userID := utils.CurrentUserID(c)
+	ctx := context.Background()
+
+	// Soft delete: set deleted_at (leazi pattern - same table, no separate deleted table)
+	result, err := ac.DB.Exec(ctx, `
 		UPDATE packages
 		SET deleted_at = NOW()
 		WHERE id = $1 AND deleted_at IS NULL
@@ -170,30 +182,58 @@ func (ac *ApplicantController) DeletePackage(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusNotFound, "Package not found")
 	}
 
-	userID := utils.CurrentUserID(c)
+	// Store undo token in Redis with TTL (leazi pattern - 7 days like password reset)
+	undoKey := fmt.Sprintf("package:undo:%s", undoToken)
+	if err := ac.Redis.Set(ctx, undoKey, id, 7*24*time.Hour).Err(); err != nil {
+		// Log warning but don't fail - package is already deleted
+		fmt.Printf("WARNING: Failed to store undo token in Redis: %v\n", err)
+	}
+
 	utils.RecordSuccessActivityLog(c, ac.DB, userID, "PACKAGE_DELETE",
 		fmt.Sprintf("Soft-deleted package (package_id=%d, user_id=%d)", id, userID), nil)
 
-	return utils.JsonSuccessResponse(c, "Package deleted", nil)
+	// Return undo token in response (leazi-style single-use token pattern)
+	return utils.JsonSuccessResponse(c, "Package deleted", map[string]string{
+		"undo_token": undoToken,
+	})
 }
 
-// RestorePackage restores a soft-deleted package (admin only)
+// RestorePackage restores a soft-deleted package using undo token from Redis (leazi pattern - admin only)
 func (ac *ApplicantController) RestorePackage(c *fiber.Ctx) error {
-	idStr := c.Query("id")
-	if idStr == "" {
-		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Package id is required as query parameter")
+	var req struct {
+		UndoToken string `json:"undo_token"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+	if req.UndoToken == "" {
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Undo token is required")
 	}
 
-	id, err := strconv.Atoi(idStr)
-	if err != nil || id < 1 {
-		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid package id")
+	userID := utils.CurrentUserID(c)
+	ctx := context.Background()
+
+	// Look up package ID from Redis (leazi pattern - token in Redis with TTL)
+	undoKey := fmt.Sprintf("package:undo:%s", req.UndoToken)
+	packageIDStr, err := ac.Redis.Get(ctx, undoKey).Result()
+	if err == redis.Nil {
+		return utils.JsonErrorResponse(c, fiber.StatusNotFound, "Invalid or expired undo token")
+	}
+	if err != nil {
+		return ac.packagesDBError(c, "Failed to verify undo token", err)
 	}
 
-	result, err := ac.DB.Exec(context.Background(), `
+	packageID, err := strconv.Atoi(packageIDStr)
+	if err != nil {
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Invalid undo token")
+	}
+
+	// Restore: clear deleted_at (leazi pattern - same table, just clear the flag)
+	result, err := ac.DB.Exec(ctx, `
 		UPDATE packages
 		SET deleted_at = NULL
 		WHERE id = $1 AND deleted_at IS NOT NULL
-	`, id)
+	`, packageID)
 	if err != nil {
 		return ac.packagesDBError(c, "Failed to restore package", err)
 	}
@@ -201,19 +241,24 @@ func (ac *ApplicantController) RestorePackage(c *fiber.Ctx) error {
 		return utils.JsonErrorResponse(c, fiber.StatusNotFound, "Package not found or not deleted")
 	}
 
-	userID := utils.CurrentUserID(c)
-	utils.RecordSuccessActivityLog(c, ac.DB, userID, "PACKAGE_RESTORE",
-		fmt.Sprintf("Restored package (package_id=%d, user_id=%d)", id, userID), nil)
+	// Delete the undo token from Redis (single-use token pattern)
+	if err := ac.Redis.Del(ctx, undoKey).Err(); err != nil {
+		fmt.Printf("WARNING: Failed to delete undo token from Redis: %v\n", err)
+	}
 
+	// Fetch restored package
 	var pkg model.Package
-	err = ac.DB.QueryRow(context.Background(), `
+	err = ac.DB.QueryRow(ctx, `
 		SELECT id, name, description, price, skills, period, currency, is_active
 		FROM packages
 		WHERE id = $1
-	`, id).Scan(&pkg.ID, &pkg.Name, &pkg.Description, &pkg.Price, &pkg.Skills, &pkg.Period, &pkg.Currency, &pkg.IsActive)
+	`, packageID).Scan(&pkg.ID, &pkg.Name, &pkg.Description, &pkg.Price, &pkg.Skills, &pkg.Period, &pkg.Currency, &pkg.IsActive)
 	if err != nil {
 		return ac.packagesDBError(c, "Failed to fetch restored package", err)
 	}
+
+	utils.RecordSuccessActivityLog(c, ac.DB, userID, "PACKAGE_RESTORE",
+		fmt.Sprintf("Restored package via undo token (package_id=%d, user_id=%d)", pkg.ID, userID), nil)
 
 	return utils.JsonSuccessResponse(c, "Package restored", pkg)
 }

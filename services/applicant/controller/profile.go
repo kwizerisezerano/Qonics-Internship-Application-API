@@ -11,17 +11,20 @@ import (
 	"github.com/qonics/qonics-appy-api/libs/shared-package/config"
 	"github.com/qonics/qonics-appy-api/libs/shared-package/utils"
 	"github.com/qonics/qonics-appy-api/services/applicant/model"
+	"github.com/redis/go-redis/v9"
 )
 
 type ApplicantController struct {
 	DB     *pgxpool.Pool
 	Config *config.Config
+	Redis  *redis.Client
 }
 
-func NewApplicantController(db *pgxpool.Pool, cfg *config.Config) *ApplicantController {
+func NewApplicantController(db *pgxpool.Pool, cfg *config.Config, rdb *redis.Client) *ApplicantController {
 	return &ApplicantController{
 		DB:     db,
 		Config: cfg,
+		Redis:  rdb,
 	}
 }
 
