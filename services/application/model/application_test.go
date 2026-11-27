@@ -13,7 +13,8 @@ func TestNewApplicationPayloadValidation(t *testing.T) {
 	base := func() NewApplicationPayload {
 		return NewApplicationPayload{
 			PackageID:      1,
-			Motivation:     "I want to learn",
+			DurationMonths: 3,
+			Motivation:    "I want to learn",
 			Experience:     "2 years",
 			EducationLevel: "university",
 			Session:        "morning",
