@@ -102,13 +102,6 @@ func init() {
 		// Ignore if column doesn't exist yet
 	}
 
-	// Add agreed_to_terms column to applications table if not exists (for backwards compatibility)
-	if _, err := db.Exec(context.Background(), `
-		ALTER TABLE applications ADD COLUMN IF NOT EXISTS agreed_to_terms BOOLEAN NOT NULL DEFAULT false
-	`); err != nil {
-		// Ignore if column already exists or other error
-	}
-
 	controller := NewApplicationController(db, cfg, cfg.InitRedis())
 
 	applicationTestApp = fiber.New(fiber.Config{AppName: "application-service-test"})
