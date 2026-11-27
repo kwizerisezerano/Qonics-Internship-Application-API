@@ -356,6 +356,20 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('session:' || $1))`, req.Session); err != nil {
 			return ac.internalError(c, "Failed to create application", err)
 		}
+
+		// Get seat capacity from settings for the specific session
+		var sessionCapacity int
+		err = tx.QueryRow(ctx, `
+			SELECT CASE
+				WHEN $1 = 'morning' THEN morning_seats
+				WHEN $1 = 'afternoon' THEN afternoon_seats
+				ELSE 3
+			END FROM settings WHERE id = 1
+		`, req.Session).Scan(&sessionCapacity)
+		if err != nil {
+			return ac.internalError(c, "Failed to get seat capacity", err)
+		}
+
 		endDate := startDate.AddDate(0, req.DurationMonths, 0)
 		var taken int
 		err = tx.QueryRow(ctx, `
@@ -367,7 +381,7 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		if err != nil {
 			return ac.internalError(c, "Failed to check seat availability", err)
 		}
-		if taken >= model.SessionCapacity {
+		if taken >= sessionCapacity {
 			// Known error - session full, no logging
 			return utils.JsonErrorResponse(c, fiber.StatusConflict,
 				"That session has no free seats for your dates. Choose another start date or session, or apply in hybrid mode.")
@@ -814,11 +828,25 @@ func (ac *ApplicationController) Availability(c *fiber.Ctx) error {
 		if err := rows.Scan(&startDate, &durationMonths, &session, &count); err != nil {
 			return ac.internalError(c, "Error scanning row", err)
 		}
+
+		// Get seat capacity for this session from settings
+		var sessionCapacity int
+		err := ac.DB.QueryRow(ctx, `
+			SELECT CASE
+				WHEN $1 = 'morning' THEN morning_seats
+				WHEN $1 = 'afternoon' THEN afternoon_seats
+				ELSE 3
+			END FROM settings WHERE id = 1
+		`, session).Scan(&sessionCapacity)
+		if err != nil {
+			return ac.internalError(c, "Failed to get seat capacity", err)
+		}
+
 		bookings = append(bookings, model.Booking{
 			StartDate:      startDate.Format(time.RFC3339),
 			EndDate:        startDate.AddDate(0, durationMonths, 0).Format(time.RFC3339),
 			Session:        session,
-			AvailableSeats: model.SessionCapacity - count,
+			AvailableSeats: sessionCapacity - count,
 		})
 	}
 

@@ -599,9 +599,9 @@ func (ac *ApplicantController) GetSettings(c *fiber.Ctx) error {
 	var closeOn *time.Time
 
 	err := ac.DB.QueryRow(ctx, `
-		SELECT applications_open, close_on, closure_message
+		SELECT applications_open, close_on, closure_message, morning_seats, afternoon_seats
 		FROM settings WHERE id = 1
-	`).Scan(&settings.ApplicationsOpen, &closeOn, &settings.ClosureMessage)
+	`).Scan(&settings.ApplicationsOpen, &closeOn, &settings.ClosureMessage, &settings.MorningSeats, &settings.AfternoonSeats)
 
 	if err != nil {
 		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Database error", utils.Logger{
@@ -638,11 +638,13 @@ func (ac *ApplicantController) SaveSettings(c *fiber.Ctx) error {
 	var existingApplicationsOpen bool
 	var existingCloseOn *time.Time
 	var existingClosureMessage string
+	var existingMorningSeats int
+	var existingAfternoonSeats int
 
 	err := ac.DB.QueryRow(ctx, `
-		SELECT applications_open, close_on, closure_message
+		SELECT applications_open, close_on, closure_message, morning_seats, afternoon_seats
 		FROM settings WHERE id = 1
-	`).Scan(&existingApplicationsOpen, &existingCloseOn, &existingClosureMessage)
+	`).Scan(&existingApplicationsOpen, &existingCloseOn, &existingClosureMessage, &existingMorningSeats, &existingAfternoonSeats)
 
 	if err != nil {
 		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Database error", utils.Logger{
@@ -662,10 +664,22 @@ func (ac *ApplicantController) SaveSettings(c *fiber.Ctx) error {
 		closeOn = &parsedTime
 	}
 
+	// Default seat values to existing if not provided
+	morningSeats := req.MorningSeats
+	afternoonSeats := req.AfternoonSeats
+	if morningSeats == 0 {
+		morningSeats = existingMorningSeats
+	}
+	if afternoonSeats == 0 {
+		afternoonSeats = existingAfternoonSeats
+	}
+
 	// Check if any value is actually changing
 	changed := false
 	if existingApplicationsOpen != req.ApplicationsOpen ||
-		existingClosureMessage != req.ClosureMessage {
+		existingClosureMessage != req.ClosureMessage ||
+		existingMorningSeats != morningSeats ||
+		existingAfternoonSeats != afternoonSeats {
 		changed = true
 	}
 
@@ -682,9 +696,9 @@ func (ac *ApplicantController) SaveSettings(c *fiber.Ctx) error {
 
 	_, err = ac.DB.Exec(ctx, `
 		UPDATE settings
-		SET applications_open = $1, close_on = $2, closure_message = $3, updated_at = NOW()
+		SET applications_open = $1, close_on = $2, closure_message = $3, morning_seats = $4, afternoon_seats = $5, updated_at = NOW()
 		WHERE id = 1
-	`, req.ApplicationsOpen, closeOn, req.ClosureMessage)
+	`, req.ApplicationsOpen, closeOn, req.ClosureMessage, morningSeats, afternoonSeats)
 
 	if err != nil {
 		return utils.JsonErrorResponse(c, fiber.StatusInternalServerError, "Failed to update settings", utils.Logger{
@@ -836,7 +850,23 @@ func (ac *ApplicantController) GetPublicSettings(c *fiber.Ctx) error {
 		})
 	}
 
-	settings := model.AppSettings{ApplicationsOpen: intake.Open, ClosureMessage: intake.Message}
+	// Get seat capacity from settings
+	var morningSeats, afternoonSeats int
+	err = ac.DB.QueryRow(context.Background(), `
+		SELECT morning_seats, afternoon_seats FROM settings WHERE id = 1
+	`).Scan(&morningSeats, &afternoonSeats)
+	if err != nil {
+		// If settings row doesn't exist, use defaults
+		morningSeats = 3
+		afternoonSeats = 3
+	}
+
+	settings := model.AppSettings{
+		ApplicationsOpen: intake.Open,
+		ClosureMessage:   intake.Message,
+		MorningSeats:     morningSeats,
+		AfternoonSeats:   afternoonSeats,
+	}
 	if intake.CloseOn != nil {
 		settings.CloseOn = intake.CloseOn.Format(time.RFC3339)
 	}

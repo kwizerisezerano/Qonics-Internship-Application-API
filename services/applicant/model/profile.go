@@ -44,6 +44,8 @@ type AppSettings struct {
 	ApplicationsOpen bool   `json:"applications_open"`
 	CloseOn          string `json:"close_on"`
 	ClosureMessage   string `json:"closure_message" validate:"omitempty,max=500"`
+	MorningSeats     int    `json:"morning_seats" validate:"omitempty,min=0"`
+	AfternoonSeats   int    `json:"afternoon_seats" validate:"omitempty,min=0"`
 }
 
 // MarkNotificationsReadRequest carries the notification ids to mark as read.

@@ -313,12 +313,16 @@ func seedOwnedFile(t *testing.T, ownerUserID int) string {
 
 // validApplicationPayload returns a payload that passes validation.
 func validApplicationPayload() map[string]any {
+	// Use a unique far-future date to avoid seat capacity conflicts
+	uniqueYear := 2090 + rand.Intn(10)
+	uniqueMonth := 1 + rand.Intn(12)
+	uniqueDay := 1 + rand.Intn(28)
 	return map[string]any{
 		"package_id":      1,
 		"duration_months": 3,
 		"motivation":      "I want to learn",
 		"experience":      "2 years",
-		"start_date":      "2099-01-15T00:00:00Z",
+		"start_date":      fmt.Sprintf("%d-%02d-%02dT00:00:00Z", uniqueYear, uniqueMonth, uniqueDay),
 		"education_level": "university",
 		"session":         "morning",
 		"work_mode":       "hybrid",
@@ -1292,13 +1296,14 @@ func TestTokenWithoutUserID(t *testing.T) {
 // session and status (for seat and availability tests).
 func seedSeatApplication(t *testing.T, profileID string, start time.Time, workMode, session, status string) string {
 	t.Helper()
+	pkgID := ensureTestPackage(t)
 	appID := uuid.New().String()
 	_, err := applicationTestDB.Exec(context.Background(), `
-		INSERT INTO applications (id, reference, applicant_id, department, specialization,
+		INSERT INTO applications (id, reference, applicant_id, package_id, skills, department, specialization,
 			motivation, experience, start_date, education_level, session, duration_months, work_mode, status, agreed_to_terms)
-		VALUES ($1, $2, $3, 'software', 'backend', 'Build things', '2 years',
-			$4, 'university', $5, 3, $6, $7, true)
-	`, appID, fmt.Sprintf("APP-%s", uniqueSuffix()), profileID, start, session, workMode, status)
+		VALUES ($1, $2, $3, $4, ARRAY['coding', 'design'], 'software', 'backend', 'Build things', '2 years',
+			$5, 'university', $6, 3, $7, $8, true)
+	`, appID, fmt.Sprintf("APP-%s", uniqueSuffix()), profileID, pkgID, start, session, workMode, status)
 	require.NoError(t, err)
 	return appID
 }
@@ -1390,6 +1395,12 @@ func TestCreateApplicationAsGuestWithDocuments(t *testing.T) {
 	require.NoError(t, err)
 	pkgID := ensureTestPackage(t)
 
+	// Use a unique far-future date to avoid seat capacity conflicts
+	uniqueYear := 2090 + rand.Intn(10)
+	uniqueMonth := 1 + rand.Intn(12)
+	uniqueDay := 1 + rand.Intn(28)
+	uniqueDate := fmt.Sprintf("%d-%02d-%02dT00:00:00Z", uniqueYear, uniqueMonth, uniqueDay)
+
 	payload := func(email string, token string, fileIDs ...string) map[string]any {
 		p := validApplicationPayload()
 		p["package_id"] = pkgID
@@ -1397,6 +1408,7 @@ func TestCreateApplicationAsGuestWithDocuments(t *testing.T) {
 		p["email"] = email
 		p["phone"] = "+250788123456"
 		p["document_ids"] = fileIDs
+		p["start_date"] = uniqueDate
 		if token != "" {
 			p["guest_token"] = token
 		}
@@ -1448,6 +1460,12 @@ func TestCreateApplicationAmountFromPackages(t *testing.T) {
 	_, err := applicationTestDB.Exec(ctx, `DELETE FROM packages WHERE name = 'Test Package'`)
 	require.NoError(t, err)
 
+	// Use a unique far-future date to avoid seat capacity conflicts
+	uniqueYear := 2090 + rand.Intn(10)
+	uniqueMonth := 1 + rand.Intn(12)
+	uniqueDay := 1 + rand.Intn(28)
+	uniqueDate := fmt.Sprintf("%d-%02d-%02dT00:00:00Z", uniqueYear, uniqueMonth, uniqueDay)
+
 	apply := func(packageID int, durationMonths int) map[string]any {
 		payload := validApplicationPayload()
 		payload["full_name"] = "Amount Applicant"
@@ -1455,6 +1473,7 @@ func TestCreateApplicationAmountFromPackages(t *testing.T) {
 		payload["phone"] = "+250788123456"
 		payload["package_id"] = packageID
 		payload["duration_months"] = durationMonths
+		payload["start_date"] = uniqueDate
 		status, body := doJSON(t, "POST", "/api/v1/applications/", payload, nil)
 		require.Equal(t, fiber.StatusOK, status, "body: %v", body)
 		app, _ := body["data"].(map[string]any)
