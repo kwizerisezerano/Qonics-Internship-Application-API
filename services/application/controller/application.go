@@ -210,6 +210,11 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		return utils.JsonValidationErrorResponse(c, err)
 	}
 
+	// Explicit check for terms agreement
+	if !req.AgreedToTerms {
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "You must agree to the terms and conditions to submit an application")
+	}
+
 	if guest {
 		if req.FullName == "" || req.Email == "" || req.Phone == "" {
 			// Known error - missing contact details, no logging
@@ -387,11 +392,11 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 	_, err = tx.Exec(ctx, `
 		INSERT INTO applications (id, reference, applicant_id, package_id, skills,
 			motivation, experience, start_date, education_level, session,
-			duration_months, work_mode, amount, status, department, specialization)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+			duration_months, work_mode, amount, status, department, specialization, agreed_to_terms)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 	`, appID, reference, applicant.ProfileID, req.PackageID, pkg.Skills,
 		req.Motivation, req.Experience, startDate, req.EducationLevel,
-		req.Session, req.DurationMonths, req.WorkMode, amount, "submitted", department, specialization)
+		req.Session, req.DurationMonths, req.WorkMode, amount, "submitted", department, specialization, req.AgreedToTerms)
 	if err != nil {
 		return ac.internalError(c, "Failed to create application", err)
 	}

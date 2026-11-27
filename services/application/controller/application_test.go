@@ -102,6 +102,13 @@ func init() {
 		// Ignore if column doesn't exist yet
 	}
 
+	// Add agreed_to_terms column to applications table if not exists (for backwards compatibility)
+	if _, err := db.Exec(context.Background(), `
+		ALTER TABLE applications ADD COLUMN IF NOT EXISTS agreed_to_terms BOOLEAN NOT NULL DEFAULT false
+	`); err != nil {
+		// Ignore if column already exists or other error
+	}
+
 	controller := NewApplicationController(db, cfg, cfg.InitRedis())
 
 	applicationTestApp = fiber.New(fiber.Config{AppName: "application-service-test"})
@@ -272,9 +279,9 @@ func seedApplication(t *testing.T, profileID string) string {
 	_, err = applicationTestDB.Exec(ctx, `
 		INSERT INTO applications (id, reference, applicant_id, package_id, skills,
 			motivation, experience, education_level, session, duration_months, work_mode, status,
-			department, specialization)
+			department, specialization, agreed_to_terms)
 		VALUES ($1, $2, $3, $4, ARRAY['coding', 'design'], 'Build things', '2 years',
-			'university', 'morning', 3, 'remote', 'submitted', 'General', 'General')
+			'university', 'morning', 3, 'hybrid', 'submitted', 'General', 'General', true)
 	`, appID, fmt.Sprintf("APP-%s", uniqueSuffix()), profileID, pkgID)
 	require.NoError(t, err)
 	return appID
@@ -322,6 +329,7 @@ func validApplicationPayload() map[string]any {
 		"education_level": "university",
 		"session":         "morning",
 		"work_mode":       "hybrid",
+		"agreed_to_terms": true,
 	}
 }
 
@@ -1294,9 +1302,9 @@ func seedSeatApplication(t *testing.T, profileID string, start time.Time, workMo
 	appID := uuid.New().String()
 	_, err := applicationTestDB.Exec(context.Background(), `
 		INSERT INTO applications (id, reference, applicant_id, department, specialization,
-			motivation, experience, start_date, education_level, session, duration_months, work_mode, status)
+			motivation, experience, start_date, education_level, session, duration_months, work_mode, status, agreed_to_terms)
 		VALUES ($1, $2, $3, 'software', 'backend', 'Build things', '2 years',
-			$4, 'university', $5, 3, $6, $7)
+			$4, 'university', $5, 3, $6, $7, true)
 	`, appID, fmt.Sprintf("APP-%s", uniqueSuffix()), profileID, start, session, workMode, status)
 	require.NoError(t, err)
 	return appID

@@ -30,6 +30,7 @@ type Application struct {
 	WorkMode       string                `json:"work_mode"`
 	Amount         *float64              `json:"amount"`
 	Skills         []string              `json:"skills,omitempty"`
+	AgreedToTerms  bool                  `json:"agreed_to_terms"`
 	Status         string                `json:"status"`
 	SubmittedAt    string                `json:"submitted_at"`
 	InterviewAt    *string               `json:"interview_at,omitempty"`
@@ -169,6 +170,7 @@ type NewApplicationPayload struct {
 	EducationLevel string   `json:"education_level" validate:"required,oneof=university high_school other"`
 	Session        string   `json:"session" validate:"required,oneof=morning afternoon"`
 	WorkMode       string   `json:"work_mode" validate:"required,oneof=onsite hybrid"`
+	AgreedToTerms  bool     `json:"agreed_to_terms" validate:"required"`
 	DocumentIDs    []string `json:"document_ids" validate:"omitempty,dive,uuid"`
 	// GuestToken proves ownership of documents a guest uploaded before applying
 	// (returned by the file service's guest upload); only used without a login.

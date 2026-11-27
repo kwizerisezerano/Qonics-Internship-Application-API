@@ -26,12 +26,6 @@ CREATE INDEX IF NOT EXISTS idx_packages_deleted_at ON packages(deleted_at);
 -- Unique index on lowercase name to prevent duplicates (case-insensitive)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_packages_name_unique ON packages (LOWER(name)) WHERE deleted_at IS NULL;
 
--- Add package_id to applications table
-ALTER TABLE applications ADD COLUMN IF NOT EXISTS package_id INTEGER REFERENCES packages(id) ON DELETE SET NULL;
-
--- Add skills array to applications table for record-keeping
-ALTER TABLE applications ADD COLUMN IF NOT EXISTS skills TEXT[];
-
 -- Seed packages with the three pricing tiers (prices are monthly by default)
 INSERT INTO packages (name, description, price, skills, period, currency, minimum_duration_period, is_active) VALUES
 ('Basic Training Package', 'Coding and Design (Figma)', 150000, ARRAY['coding', 'design'], 'monthly', 'RWF', 1, true),
