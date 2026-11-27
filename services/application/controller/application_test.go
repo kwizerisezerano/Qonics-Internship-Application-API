@@ -318,11 +318,15 @@ func validApplicationPayload() map[string]any {
 		"duration_months": 3,
 		"motivation":      "I want to learn",
 		"experience":      "2 years",
-		"start_date":      "2026-01-15T00:00:00Z",
+		"start_date":      "2099-01-15T00:00:00Z",
 		"education_level": "university",
 		"session":         "morning",
-		"work_mode":       "remote",
+		"work_mode":       "hybrid",
 	}
+}
+
+func generateTestPackageName(base string) string {
+	return fmt.Sprintf("%s-%d", base, time.Now().UnixNano())
 }
 
 // TestCreateApplicationRoute covers POST /api/v1/applications/.
@@ -335,9 +339,9 @@ func TestCreateApplicationRoute(t *testing.T) {
 	var pkgID int
 	err := applicationTestDB.QueryRow(context.Background(), `
 		INSERT INTO packages (name, description, price, skills, period, currency, is_active)
-		VALUES ('Test Package', 'Test', 150000, ARRAY['coding', 'design'], 'monthly', 'RWF', true)
+		VALUES ($1, 'Test', 150000, ARRAY['coding', 'design'], 'monthly', 'RWF', true)
 		RETURNING id
-	`).Scan(&pkgID)
+	`, generateTestPackageName("Test Package")).Scan(&pkgID)
 	require.NoError(t, err)
 	defer applicationTestDB.Exec(context.Background(), `DELETE FROM packages WHERE id = $1`, pkgID)
 

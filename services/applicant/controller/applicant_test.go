@@ -93,6 +93,13 @@ func init() {
 		panic("Failed to create index: " + err.Error())
 	}
 
+	// Add minimum_duration_period column to packages table if not exists
+	if _, err := db.Exec(context.Background(), `
+		ALTER TABLE packages ADD COLUMN IF NOT EXISTS minimum_duration_period INTEGER NOT NULL DEFAULT 1 CHECK (minimum_duration_period >= 1)
+	`); err != nil {
+		panic("Failed to add minimum_duration_period column: " + err.Error())
+	}
+
 	// Clean up any existing soft-deleted packages
 	if _, err := db.Exec(context.Background(), `UPDATE packages SET deleted_at = NULL WHERE deleted_at IS NOT NULL`); err != nil {
 		// Ignore if column doesn't exist yet

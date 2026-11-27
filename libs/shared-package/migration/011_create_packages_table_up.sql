@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS packages (
     skills TEXT[] NOT NULL,
     period VARCHAR(20) NOT NULL DEFAULT 'monthly' CHECK (period IN ('monthly', 'yearly', 'quarterly')),
     currency VARCHAR(3) NOT NULL DEFAULT 'RWF',
+    minimum_duration_period INTEGER NOT NULL DEFAULT 1 CHECK (minimum_duration_period >= 1),
     is_active BOOLEAN DEFAULT true,
     deleted_at TIMESTAMP WITH TIME ZONE, -- Soft delete support (leazi pattern)
     updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -32,7 +33,7 @@ ALTER TABLE applications ADD COLUMN IF NOT EXISTS package_id INTEGER REFERENCES 
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS skills TEXT[];
 
 -- Seed packages with the three pricing tiers (prices are monthly by default)
-INSERT INTO packages (name, description, price, skills, period, currency, is_active) VALUES
-('Basic Training Package', 'Coding and Design (Figma)', 150000, ARRAY['coding', 'design'], 'monthly', 'RWF', true),
-('Standard Training Package', 'Coding, Design (Figma), 3D Printing, and CNC', 250000, ARRAY['coding', 'design', '3d-printing', 'cnc'], 'monthly', 'RWF', true),
-('Premium Training Package', 'Coding, Design (Figma), 3D Printing, CNC, and IoT (Embedded System)', 300000, ARRAY['coding', 'design', '3d-printing', 'cnc', 'iot'], 'monthly', 'RWF', true);
+INSERT INTO packages (name, description, price, skills, period, currency, minimum_duration_period, is_active) VALUES
+('Basic Training Package', 'Coding and Design (Figma)', 150000, ARRAY['coding', 'design'], 'monthly', 'RWF', 1, true),
+('Standard Training Package', 'Coding, Design (Figma), 3D Printing, and CNC', 250000, ARRAY['coding', 'design', '3d-printing', 'cnc'], 'monthly', 'RWF', 1, true),
+('Premium Training Package', 'Coding, Design (Figma), 3D Printing, CNC, and IoT (Embedded System)', 300000, ARRAY['coding', 'design', '3d-printing', 'cnc', 'iot'], 'monthly', 'RWF', 6, true);

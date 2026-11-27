@@ -18,21 +18,22 @@ type rowQuerier interface {
 
 // Package represents a training package with pricing and skills
 type Package struct {
-	ID          int
-	Name        string
-	Description string
-	Price       float64
-	Skills      []string
-	Period      string
-	Currency    string
-	IsActive    bool
+	ID                    int
+	Name                  string
+	Description           string
+	Price                 float64
+	Skills                []string
+	Period                string
+	Currency              string
+	IsActive              bool
+	MinimumDurationPeriod int
 }
 
 // LookupPackage returns the package details for a given package_id
 func LookupPackage(ctx context.Context, db rowQuerier, packageID int) (*Package, error) {
 	var pkg Package
 	err := db.QueryRow(ctx, `
-		SELECT id, name, description, price, skills, period, currency, is_active
+		SELECT id, name, description, price, skills, period, currency, is_active, minimum_duration_period
 		FROM packages
 		WHERE id = $1 AND is_active = true AND deleted_at IS NULL
 	`, packageID).Scan(
@@ -44,6 +45,7 @@ func LookupPackage(ctx context.Context, db rowQuerier, packageID int) (*Package,
 		&pkg.Period,
 		&pkg.Currency,
 		&pkg.IsActive,
+		&pkg.MinimumDurationPeriod,
 	)
 	if err != nil {
 		return nil, err

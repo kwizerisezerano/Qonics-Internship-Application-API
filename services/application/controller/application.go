@@ -338,6 +338,12 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		return ac.internalError(c, "Failed to lookup package", err)
 	}
 
+	// Validate duration meets package minimum requirement
+	if req.DurationMonths < pkg.MinimumDurationPeriod {
+		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, fmt.Sprintf(
+			"Duration must be at least %d months for this package", pkg.MinimumDurationPeriod))
+	}
+
 	// On-site and hybrid interns need a seat in their daily session for the
 	// whole internship. Count live applications whose period overlaps this one;
 	// the per-session lock stops two submissions taking the last seat at once.
@@ -359,7 +365,7 @@ func (ac *ApplicationController) Create(c *fiber.Ctx) error {
 		if taken >= model.SessionCapacity {
 			// Known error - session full, no logging
 			return utils.JsonErrorResponse(c, fiber.StatusConflict,
-				"That session has no free seats for your dates. Choose another start date or session, or apply remotely.")
+				"That session has no free seats for your dates. Choose another start date or session, or apply in hybrid mode.")
 		}
 	}
 

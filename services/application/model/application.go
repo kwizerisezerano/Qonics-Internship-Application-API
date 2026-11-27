@@ -166,9 +166,9 @@ type NewApplicationPayload struct {
 	Motivation     string   `json:"motivation" validate:"required,max=2000"`
 	Experience     string   `json:"experience" validate:"required,max=2000"`
 	StartDate      string   `json:"start_date"`
-	EducationLevel string   `json:"education_level" validate:"required,oneof=university high_school"`
+	EducationLevel string   `json:"education_level" validate:"required,oneof=university high_school other"`
 	Session        string   `json:"session" validate:"required,oneof=morning afternoon"`
-	WorkMode       string   `json:"work_mode" validate:"required,oneof=onsite remote hybrid"`
+	WorkMode       string   `json:"work_mode" validate:"required,oneof=onsite hybrid"`
 	DocumentIDs    []string `json:"document_ids" validate:"omitempty,dive,uuid"`
 	// GuestToken proves ownership of documents a guest uploaded before applying
 	// (returned by the file service's guest upload); only used without a login.
@@ -186,14 +186,15 @@ type AddNoteRequest struct {
 }
 
 type Package struct {
-	ID             int      `json:"id"`
-	Name           string   `json:"name"`
-	Description    string   `json:"description"`
-	Price          float64  `json:"price"`
-	Skills         []string `json:"skills"`
-	DurationMonths int      `json:"duration_months"`
-	Currency       string   `json:"currency"`
-	IsActive       bool     `json:"is_active"`
+	ID                    int      `json:"id"`
+	Name                  string   `json:"name"`
+	Description           string   `json:"description"`
+	Price                 float64  `json:"price"`
+	Skills                []string `json:"skills"`
+	DurationMonths        int      `json:"duration_months"`
+	Currency              string   `json:"currency"`
+	IsActive              bool     `json:"is_active"`
+	MinimumDurationPeriod int      `json:"minimum_duration_period"`
 }
 
 type Booking struct {
@@ -209,7 +210,6 @@ type Booking struct {
 const SessionCapacity = 6
 
 // UsesSeat reports whether a work mode occupies a seat in a daily session
-// (remote interns don't).
 func UsesSeat(workMode string) bool {
 	return workMode == "onsite" || workMode == "hybrid"
 }
