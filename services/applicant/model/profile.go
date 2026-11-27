@@ -135,12 +135,13 @@ type ActivityLogFilter struct {
 
 // Package is a training package with pricing, skills, and billing period.
 type Package struct {
-	ID          int      `json:"id"`
-	Name        string   `json:"name" validate:"required"`
-	Description string   `json:"description"`
-	Price       float64  `json:"price" validate:"required,gte=0,lte=100000000"`
-	Skills      []string `json:"skills" validate:"required"`
-	Period      string   `json:"period" validate:"required,oneof=monthly yearly quarterly"`
-	Currency    string   `json:"currency" validate:"omitempty,len=3,uppercase"`
-	IsActive    bool     `json:"is_active"`
+	ID                    int      `json:"id"`
+	Name                  string   `json:"name" validate:"required"`
+	Description           string   `json:"description"`
+	Price                 float64  `json:"price" validate:"required,gte=0,lte=100000000"`
+	Skills                []string `json:"skills" validate:"required"`
+	Period                string   `json:"period" validate:"required,oneof=monthly yearly quarterly"`
+	Currency              string   `json:"currency" validate:"omitempty,len=3,uppercase"`
+	IsActive              bool     `json:"is_active"`
+	MinimumDurationPeriod int      `json:"minimum_duration_period"`
 }

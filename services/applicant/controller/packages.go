@@ -29,10 +29,10 @@ func (ac *ApplicantController) ListPackages(c *fiber.Ctx) error {
 
 		var pkg model.Package
 		err = ac.DB.QueryRow(ctx, `
-			SELECT id, name, description, price, skills, period, currency, is_active
+			SELECT id, name, description, price, skills, period, currency, is_active, minimum_duration_period
 			FROM packages
 			WHERE id = $1 AND is_active = true AND deleted_at IS NULL
-		`, id).Scan(&pkg.ID, &pkg.Name, &pkg.Description, &pkg.Price, &pkg.Skills, &pkg.Period, &pkg.Currency, &pkg.IsActive)
+		`, id).Scan(&pkg.ID, &pkg.Name, &pkg.Description, &pkg.Price, &pkg.Skills, &pkg.Period, &pkg.Currency, &pkg.IsActive, &pkg.MinimumDurationPeriod)
 		if err == pgx.ErrNoRows {
 			return utils.JsonErrorResponse(c, fiber.StatusNotFound, "Package not found")
 		}
@@ -52,7 +52,7 @@ func (ac *ApplicantController) ListPackages(c *fiber.Ctx) error {
 	}
 
 	rows, err := ac.DB.Query(ctx, `
-		SELECT id, name, description, price, skills, period, currency, is_active
+		SELECT id, name, description, price, skills, period, currency, is_active, minimum_duration_period
 		FROM packages
 		WHERE is_active = true AND deleted_at IS NULL
 		ORDER BY id
@@ -65,7 +65,7 @@ func (ac *ApplicantController) ListPackages(c *fiber.Ctx) error {
 	packages := []model.Package{}
 	for rows.Next() {
 		var pkg model.Package
-		if err := rows.Scan(&pkg.ID, &pkg.Name, &pkg.Description, &pkg.Price, &pkg.Skills, &pkg.Period, &pkg.Currency, &pkg.IsActive); err != nil {
+		if err := rows.Scan(&pkg.ID, &pkg.Name, &pkg.Description, &pkg.Price, &pkg.Skills, &pkg.Period, &pkg.Currency, &pkg.IsActive, &pkg.MinimumDurationPeriod); err != nil {
 			return ac.packagesDBError(c, "Database error", err)
 		}
 		packages = append(packages, pkg)
@@ -89,15 +89,18 @@ func (ac *ApplicantController) SavePackage(c *fiber.Ctx) error {
 	if req.Price < 0 {
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Price cannot be negative")
 	}
+	if req.MinimumDurationPeriod < 1 {
+		req.MinimumDurationPeriod = 1
+	}
 
 	ctx := context.Background()
 	userID := utils.CurrentUserID(c)
 
 	err := ac.DB.QueryRow(ctx, `
-		INSERT INTO packages (name, description, price, skills, period, currency, updated_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO packages (name, description, price, skills, period, currency, minimum_duration_period, updated_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id
-	`, req.Name, req.Description, req.Price, req.Skills, req.Period, req.Currency, userID).Scan(&req.ID)
+	`, req.Name, req.Description, req.Price, req.Skills, req.Period, req.Currency, req.MinimumDurationPeriod, userID).Scan(&req.ID)
 	if err != nil {
 		// Check for unique constraint violation (duplicate name)
 		if isDuplicateKeyError(err) {
@@ -134,13 +137,16 @@ func (ac *ApplicantController) UpdatePackage(c *fiber.Ctx) error {
 	if req.Price < 0 {
 		return utils.JsonErrorResponse(c, fiber.StatusBadRequest, "Price cannot be negative")
 	}
+	if req.MinimumDurationPeriod < 1 {
+		req.MinimumDurationPeriod = 1
+	}
 
 	userID := utils.CurrentUserID(c)
 	result, err := ac.DB.Exec(context.Background(), `
 		UPDATE packages
-		SET name = $2, description = $3, price = $4, skills = $5, period = $6, currency = $7, updated_by = $8, updated_at = NOW()
+		SET name = $2, description = $3, price = $4, skills = $5, period = $6, currency = $7, minimum_duration_period = $8, updated_by = $9, updated_at = NOW()
 		WHERE id = $1
-	`, id, req.Name, req.Description, req.Price, req.Skills, req.Period, req.Currency, userID)
+	`, id, req.Name, req.Description, req.Price, req.Skills, req.Period, req.Currency, req.MinimumDurationPeriod, userID)
 	if err != nil {
 		return ac.packagesDBError(c, "Failed to update package", err)
 	}
@@ -256,10 +262,10 @@ func (ac *ApplicantController) RestorePackage(c *fiber.Ctx) error {
 	// Fetch restored package
 	var pkg model.Package
 	err = ac.DB.QueryRow(ctx, `
-		SELECT id, name, description, price, skills, period, currency, is_active
+		SELECT id, name, description, price, skills, period, currency, is_active, minimum_duration_period
 		FROM packages
 		WHERE id = $1
-	`, packageID).Scan(&pkg.ID, &pkg.Name, &pkg.Description, &pkg.Price, &pkg.Skills, &pkg.Period, &pkg.Currency, &pkg.IsActive)
+	`, packageID).Scan(&pkg.ID, &pkg.Name, &pkg.Description, &pkg.Price, &pkg.Skills, &pkg.Period, &pkg.Currency, &pkg.IsActive, &pkg.MinimumDurationPeriod)
 	if err != nil {
 		return ac.packagesDBError(c, "Failed to fetch restored package", err)
 	}
